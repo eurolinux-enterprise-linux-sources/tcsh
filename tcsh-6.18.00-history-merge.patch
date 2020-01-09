@@ -1,0 +1,37 @@
+diff -upr tcsh-6.18.00_orig/sh.hist.c tcsh-6.18.00_work/sh.hist.c
+--- tcsh-6.18.00_orig/sh.hist.c	2013-03-28 10:13:52.165407699 +0100
++++ tcsh-6.18.00_work/sh.hist.c	2013-03-28 10:19:49.168703936 +0100
+@@ -99,7 +99,7 @@ hremove(struct Hist *hp)
+ 
+ /* Prune length of history list to specified size by history variable. */
+ PG_STATIC void
+-discardExcess(int histlen)
++discardExcess(int histlen, int flg)
+ {
+     struct Hist *hp, *np;
+     if (histTail == NULL) {
+@@ -110,13 +110,13 @@ discardExcess(int histlen)
+      * the list is still too long scan the whole list as before.  But only do a
+      * full scan if the list is more than 6% (1/16th) too long. */
+     while (histCount > (unsigned)histlen && (np = Histlist.Hnext)) {
+-        if (eventno - np->Href >= histlen || histlen == 0)
++        if ((eventno - np->Href >= histlen || histlen == 0) && ! (flg & HIST_MERGE))
+             hremove(np), hfree(np);
+         else
+             break;
+     }
+     while (histCount > (unsigned)histlen && (np = histTail) != &Histlist) {
+-        if (eventno - np->Href >= histlen || histlen == 0)
++        if ((eventno - np->Href >= histlen || histlen == 0) || flg & HIST_MERGE)
+             hremove(np), hfree(np);
+         else
+             break;
+@@ -153,7 +153,7 @@ savehist(
+     }
+     if (sp)
+         (void) enthist(++eventno, sp, 1, flg, histlen);
+-    discardExcess(histlen);
++    discardExcess(histlen, flg);
+ }
+ 
+ #define USE_JENKINS_HASH 1

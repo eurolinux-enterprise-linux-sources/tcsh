@@ -1,0 +1,195 @@
+From dde61c8a6ee767bbfa20018ab277e3e38e3a613f Mon Sep 17 00:00:00 2001
+From: Roman Kollar <rkollar@redhat.com>
+Date: Fri, 12 Oct 2012 13:40:12 +0200
+Subject: [PATCH] Reverse patch for history handling in loops
+
+Originally reported at Red Hat Bugzilla:
+https://bugzilla.redhat.com/show_bug.cgi?id=814069
+
+Reverse patch for commit 23a51b0a709628af57729a07cbbfae3c95e98e6f in the upstream repo
+
+Adjusted by Jaromir Koncicky (jkoncick) to fit with version 6.18.01
+---
+ sh.func.c | 137 +-------------------------------------------------------------
+ 1 file changed, 1 insertion(+), 136 deletions(-)
+
+diff --git a/sh.func.c b/sh.func.c
+index 31c5330..b564e53 100644
+--- a/sh.func.c
++++ b/sh.func.c
+@@ -61,7 +61,6 @@ static	void	doagain		(void);
+ static  const char *isrchx	(int);
+ static	void	search		(int, int, Char *);
+ static	int	getword		(struct Strbuf *);
+-static	struct wordent	*histgetword	(struct wordent *);
+ static	void	toend		(void);
+ static	void	xecho		(int, Char **);
+ static	int	islocale_var	(Char *);
+@@ -754,7 +753,6 @@ search(int type, int level, Char *goal)
+ {
+     struct Strbuf word = Strbuf_INIT;
+     Char *cp;
+-    struct wordent *histent = NULL, *ohistent = NULL;
+ 
+     Stype = type;
+     Sgoal = goal;
+@@ -767,28 +765,12 @@ search(int type, int level, Char *goal)
+     }
+     cleanup_push(&word, Strbuf_cleanup);
+     do {
+-	    
+-	if (intty) {
+-	    histent = xmalloc(sizeof(*histent));
+-	    ohistent = xmalloc(sizeof(*histent));
+-	    ohistent->word = STRNULL;
+-	    ohistent->next = histent;
+-	    histent->prev = ohistent;
+-	}
+-
+ 	if (intty && fseekp == feobp && aret == TCSH_F_SEEK)
+ 	    printprompt(1, isrchx(type == TC_BREAK ? zlast : type));
+ 	/* xprintf("? "), flush(); */
+ 	(void) getword(&word);
+ 	Strbuf_terminate(&word);
+ 
+-	if (intty && Strlen(word.s) > 0) {
+-	    histent->word = Strsave(word.s);
+-	    histent->next = xmalloc(sizeof(*histent));
+-	    histent->next->prev = histent;
+-	    histent = histent->next;
+-	}
+-
+ 	switch (srchx(word.s)) {
+ 
+ 	case TC_ELSE:
+@@ -864,126 +846,12 @@ search(int type, int level, Char *goal)
+ 		level = -1;
+ 	    break;
+ 	}
+-	if (intty) {
+-	    ohistent->prev = histgetword(histent);
+-	    ohistent->prev->next = ohistent;
+-	    savehist(ohistent, 0);
+-	    freelex(ohistent);
+-	    xfree(ohistent);
+-	} else 
+-	    (void) getword(NULL);
++    (void) getword(NULL);
+     } while (level >= 0);
+  end:
+     cleanup_until(&word);
+ }
+ 
+-static struct wordent *
+-histgetword(struct wordent *histent) 
+-{
+-    int found = 0, first;
+-    eChar c, d;
+-    int e;
+-    struct Strbuf *tmp;
+-    tmp = xmalloc(sizeof(*tmp));
+-    tmp->size = 0;
+-    tmp->s = NULL;
+-    c = readc(1);
+-    d = 0;
+-    e = 0;
+-    for (;;) {
+-	tmp->len = 0;
+-	Strbuf_terminate (tmp);
+-	while (c == ' ' || c == '\t')
+-	    c = readc(1);
+-	if (c == '#')
+-	    do
+-		c = readc(1);
+-	    while (c != CHAR_ERR && c != '\n');
+-	if (c == CHAR_ERR)
+-	    goto past;
+-	if (c == '\n') 
+-	    goto nl;
+-	unreadc(c);
+-	found = 1;
+-	first = 1;
+-	do {
+-	    e = (c == '\\');
+-	    c = readc(1);
+-	    if (c == '\\' && !e) {
+-		if ((c = readc(1)) == '\n') {
+-		    e = 1;
+-		    c = ' ';
+-		} else {
+-		    unreadc(c);
+-		    c = '\\';
+-		}
+-	    }
+-	    if ((c == '\'' || c == '"') && !e) {
+-		if (d == 0)
+-		    d = c;
+-		else if (d == c)
+-		    d = 0;
+-	    }
+-	    if (c == CHAR_ERR)
+-		goto past;
+-	    
+-	    Strbuf_append1(tmp, (Char) c);
+-	    
+-	    if (!first && !d && c == '(' && !e) {
+-		break;
+-	    }
+-	    first = 0;
+-	} while (d || e || (c != ' ' && c != '\t' && c != '\n'));
+-	tmp->len--;
+-	if (tmp->len) {
+-	    Strbuf_terminate(tmp);
+-	    histent->word = Strsave(tmp->s);
+-	    histent->next = xmalloc(sizeof (*histent));
+-	    histent->next->prev = histent;
+-	    histent = histent->next;
+-	}
+-	if (c == '\n') {
+-	nl:
+-	    tmp->len = 0;
+-	    Strbuf_append1(tmp, (Char) c);
+-	    Strbuf_terminate(tmp);
+-	    histent->word = Strsave(tmp->s);
+-	    return histent;
+-	}
+-    }
+-    
+-past:
+-    switch (Stype) {
+-
+-    case TC_IF:
+-	stderror(ERR_NAME | ERR_NOTFOUND, "then/endif");
+-	break;
+-
+-    case TC_ELSE:
+-	stderror(ERR_NAME | ERR_NOTFOUND, "endif");
+-	break;
+-
+-    case TC_BRKSW:
+-    case TC_SWITCH:
+-	stderror(ERR_NAME | ERR_NOTFOUND, "endsw");
+-	break;
+-
+-    case TC_BREAK:
+-	stderror(ERR_NAME | ERR_NOTFOUND, "end");
+-	break;
+-
+-    case TC_GOTO:
+-	setname(short2str(Sgoal));
+-	stderror(ERR_NAME | ERR_NOTFOUND, "label");
+-	break;
+-
+-    default:
+-	break;
+-    }
+-    /* NOTREACHED */
+-    return NULL;
+-}
+-
+ static int
+ getword(struct Strbuf *wp)
+ {
+-- 
+1.7.11.4
+

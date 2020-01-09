@@ -1,0 +1,25 @@
+From 039673bc9e8f3f6b198d1fc68878324a63bd111a Mon Sep 17 00:00:00 2001
+From: "Vojtech Vitek (V-Teq)" <vvitek@redhat.com>
+Date: Thu, 15 Mar 2012 02:10:35 +0100
+Subject: [PATCH] Search for tinfo library instead of termcap/(n)curses etc.
+
+---
+ configure.in |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/configure.in b/configure.in
+index 103ab37..9a2afef 100644
+--- a/configure.in
++++ b/configure.in
+@@ -299,7 +299,7 @@ fi
+ dnl Checks for libraries
+ AC_SEARCH_LIBS(crypt, crypt)
+ AC_SEARCH_LIBS(getspnam, sec)
+-AC_SEARCH_LIBS(tgetent, termlib termcap curses ncurses)
++AC_SEARCH_LIBS(tgetent, tinfo)
+ AC_SEARCH_LIBS(gethostbyname, nsl)
+ AC_SEARCH_LIBS(connect, socket)
+ AC_SEARCH_LIBS(catgets, catgets)
+-- 
+1.7.6.5
+

@@ -1,0 +1,28 @@
+From 4e38e112b09e66d59095fd787a0aa8c90a3bf06f Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Tue, 8 Mar 2016 12:42:06 +0000
+Subject: [PATCH 1/1] Detect __GLIBC__ so it uses sysmalloc from <features.h>
+
+  https://bugzilla.redhat.com/show_bug.cgi?id=1303323
+---
+ config_f.h | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/config_f.h b/config_f.h
+index 433730e..97fecc1 100644
+--- a/config_f.h
++++ b/config_f.h
+@@ -38,6 +38,10 @@
+ #ifndef _h_config_f
+ #define _h_config_f
+ 
++#ifdef HAVE_FEATURES_H
++#include <features.h>		/* for __GLIBC__ */
++#endif
++
+ /*
+  * SHORT_STRINGS Use at least 16 bit characters instead of 8 bit chars
+  * 	         This fixes up quoting problems and eases implementation
+-- 
+2.5.5
+

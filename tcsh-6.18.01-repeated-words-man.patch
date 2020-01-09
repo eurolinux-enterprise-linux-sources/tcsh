@@ -1,0 +1,21 @@
+diff -upr tcsh-6.18.01_orig/tcsh.man tcsh-6.18.01_work/tcsh.man
+--- tcsh-6.18.01_orig/tcsh.man	2013-04-05 16:22:07.299927566 +0200
++++ tcsh-6.18.01_work/tcsh.man	2013-04-05 16:22:37.885019969 +0200
+@@ -1401,7 +1401,7 @@ The \fBglobstar\fR shell variable can be
+ a file glob pattern that matches any string of characters including `/',
+ recursively traversing any existing sub-directories.  For example, 
+ `ls **.c' will list all the .c files in the current directory tree.
+-If used by itself, it will match match zero or more sub-directories
++If used by itself, it will match zero or more sub-directories
+ (e.g. `ls /usr/include/**/time.h' will list any file named `time.h'
+ in the /usr/include directory tree; `ls /usr/include/**time.h' will match 
+ any file in the /usr/include directory tree ending in `time.h'; and
+@@ -3887,7 +3887,7 @@ with `.' except for `.' and `..'
+ If set, the `**' and `***' file glob patterns will match any string of 
+ characters including `/' traversing any existing sub-directories.  (e.g. 
+ `ls **.c' will list all the .c files in the current directory tree).
+-If used by itself, it will match match zero or more sub-directories
++If used by itself, it will match zero or more sub-directories
+ (e.g. `ls /usr/include/**/time.h' will list any file named `time.h'
+ in the /usr/include directory tree; whereas `ls /usr/include/**time.h'
+ will match any file in the /usr/include directory tree ending in `time.h').

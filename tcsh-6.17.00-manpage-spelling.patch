@@ -1,0 +1,36 @@
+From 76da82e1683c7b7f000081c4759ff4b742bf95f0 Mon Sep 17 00:00:00 2001
+From: "Vojtech Vitek (V-Teq)" <vvitek@redhat.com>
+Date: Sat, 29 Oct 2011 21:18:34 +0200
+Subject: [PATCH] Fix minor man page spelling mistakes
+
+Changes proposed by John Bradshaw.
+rhbz#675137
+---
+ tcsh.man |    4 ++--
+ 1 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/tcsh.man b/tcsh.man
+index e44e2c2..309071c 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -1718,7 +1718,7 @@ rather than to the file to which the link points (+) *
+ see if it has the specified relationship to the real user.  If \fIfile\fR
+ does not exist or is inaccessible or, for the operators indicated by `*',
+ if the specified file type does not exist on the current system,
+-then all enquiries return false, i.e., `0'.
++then all inquiries return false, i.e., `0'.
+ .PP
+ These operators may be combined for conciseness: `\-\fIxy file\fR' is
+ equivalent to `\-\fIx file\fR && \-\fIy file\fR'.  (+) For example, `\-fx' is true
+@@ -3555,7 +3555,7 @@ whenever the environment variable changes the shell changes the corresponding
+ shell variable to match (unless the shell variable is read-only) and vice
+ versa.  Note that although \fBcwd\fR and \fBPWD\fR have identical meanings, they
+ are not synchronized in this manner, and that the shell automatically
+-interconverts the different formats of \fBpath\fR and \fBPATH\fR.
++converts between the different formats of \fBpath\fR and \fBPATH\fR.
+ .TP 8
+ .B addsuffix \fR(+)
+ If set, filename completion adds `/' to the end of directories and a space
+-- 
+1.7.6.2
+

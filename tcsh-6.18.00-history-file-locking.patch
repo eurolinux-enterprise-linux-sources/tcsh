@@ -1,0 +1,684 @@
+From f813180f2fc1d682dd097e4a05ef4d15000204ad Mon Sep 17 00:00:00 2001
+From: Roman Kollar <rkollar@redhat.com>
+Date: Mon, 29 Oct 2012 17:52:52 +0100
+Subject: [PATCH] Add .history file locking - shared readers, exclusive writer
+
+Originally reported at Red Hat Bugzilla:
+https://bugzilla.redhat.com/show_bug.cgi?id=648592
+
+Patch by Vojtech Vitek (V-Teq) <vvitek@redhat.com>
+
+Additional changes reflecting:
+https://bugzilla.redhat.com/show_bug.cgi?id=879371
+
+Changes by Fridolin Pokorny <fpokorny@redhat.com>
+
+---
+
+diff -upr tcsh-6.18.00_orig/sh.c tcsh-6.18.00_work/sh.c
+--- tcsh-6.18.00_orig/sh.c	2013-03-28 10:06:17.969859477 +0100
++++ tcsh-6.18.00_work/sh.c	2013-03-28 10:07:21.155082032 +0100
+@@ -140,6 +140,7 @@ struct saved_state {
+     int	  cantell;
+     struct Bin	  B;
+     int		  justpr;
++    int		  close_unit;
+ };
+ 
+ static	int		  srccat	(Char *, Char *);
+@@ -1369,7 +1370,7 @@ main(int argc, char **argv)
+ 	/*
+ 	 * Source history before .login so that it is available in .login
+ 	 */
+-	loadhist(NULL, 0);
++	loadhist(NULL, HIST_FILE_RDLCK);
+ #ifndef LOGINFIRST
+ 	if (loginsh)
+ 	    (void) srccat(varval(STRhome), STRsldotlogin);
+@@ -1492,7 +1493,7 @@ static int
+ srccat(Char *cp, Char *dp)
+ {
+     if (cp[0] == '/' && cp[1] == '\0') 
+-	return srcfile(short2str(dp), (mflag ? 0 : 1), 0, NULL);
++	return srcfile(short2str(dp), (mflag ? 0 : HIST_ONLY), 0, NULL);
+     else {
+ 	Char *ep;
+ 	char   *ptr;
+@@ -1508,7 +1509,7 @@ srccat(Char *cp, Char *dp)
+ 	cleanup_push(ep, xfree);
+ 	ptr = short2str(ep);
+ 
+-	rv = srcfile(ptr, (mflag ? 0 : 1), 0, NULL);
++	rv = srcfile(ptr, (mflag ? 0 : HIST_ONLY), 0, NULL);
+ 	cleanup_until(ep);
+ 	return rv;
+     }
+@@ -1522,20 +1523,49 @@ static int
+ #else
+ int
+ #endif /*WINNT_NATIVE*/
+-srcfile(const char *f, int onlyown, int flag, Char **av)
++srcfile(const char *f, int onlyown, int flg, Char **av)
+ {
+-    int unit;
+-
+-    if ((unit = xopen(f, O_RDONLY|O_LARGEFILE)) == -1) 
+-	return 0;
+-    cleanup_push(&unit, open_cleanup);
+-    unit = dmove(unit, -1);
+-    cleanup_ignore(&unit);
+-    cleanup_until(&unit);
+-
+-    (void) close_on_exec(unit, 1);
+-    srcunit(unit, onlyown, flag, av);
+-    return 1;
++    int *unit;
++
++    unit = xmalloc(sizeof(*unit));
++    cleanup_push(unit, xfree);
++    *unit = xopen(f, O_LARGEFILE |
++		    ((flg & HIST_FILE_WRLCK) ? (O_CREAT|O_RDWR) : O_RDONLY), 0600);
++    if (*unit == -1)
++	return 0; /* Error. */
++
++    cleanup_push(unit, open_cleanup);
++    *unit = dmove(*unit, -1);
++    (void) close_on_exec(*unit, 1);
++
++    if (flg & (HIST_FILE_WRLCK | HIST_FILE_RDLCK)) {
++	struct flock fl;
++
++	fl.l_type = (flg & HIST_FILE_WRLCK) ? F_WRLCK : F_RDLCK;
++	fl.l_whence = SEEK_SET;
++	fl.l_start = 0;
++	fl.l_len = 0;
++
++	cleanup_push(unit, fcntl_cleanup);
++	if (fcntl(*unit, F_SETLKW, &fl) == -1)
++	    cleanup_ignore(unit);
++    }
++
++    srcunit(*unit, onlyown, flg, av);
++
++    /* Unlock the unit, if we don't want to leave it locked (or open). */
++    if ((flg & (HIST_FILE_WRLCK | HIST_FILE_RDLCK)) &&
++        (!(flg & HIST_FILE_LOCK) || !(flg & HIST_FILE_OPEN)))
++	cleanup_until(unit); /* fcntl_cleanup */
++
++    /* Close the unit, if we don't want to leave it open. */
++    if (!(flg & HIST_FILE_OPEN)) {
++	cleanup_until(unit); /* open_cleanup */
++	cleanup_until(unit); /* xfree */
++	return -1; /* Not error but invalid file descriptor. */
++    }
++
++    return *unit; /* File descriptor (fd > FSAFE). */
+ }
+ 
+ 
+@@ -1544,7 +1574,7 @@ srcfile(const char *f, int onlyown, int
+  * fd.
+  */
+ static void
+-st_save(struct saved_state *st, int unit, int hflg, Char **al, Char **av)
++st_save(struct saved_state *st, int unit, int flg, Char **al, Char **av)
+ {
+     st->insource	= insource;
+     st->SHIN		= SHIN;
+@@ -1593,10 +1623,14 @@ st_save(struct saved_state *st, int unit
+     st->onelflg		= onelflg;
+     st->enterhist	= enterhist;
+     st->justpr		= justpr;
+-    if (hflg)
++    if (flg & (HIST_ONLY | HIST_MERGE))
+ 	st->HIST	= HIST;
+     else
+ 	st->HIST	= '\0';
++    if (flg & HIST_FILE_OPEN)
++	st->close_unit = 0;
++    else
++	st->close_unit = 1;
+     st->cantell		= cantell;
+     cpybin(st->B, B);
+ 
+@@ -1635,7 +1669,7 @@ st_save(struct saved_state *st, int unit
+     evalp	= 0;
+     alvec	= al;
+     alvecp	= 0;
+-    enterhist	= hflg;
++    enterhist	= flg & (HIST_ONLY | HIST_MERGE);
+     if (enterhist)
+ 	HIST	= '\0';
+     insource	= 1;
+@@ -1668,7 +1702,8 @@ st_restore(void *xst)
+     }
+     cpybin(B, st->B);
+ 
+-    xclose(SHIN);
++    if (st->close_unit)
++	xclose(SHIN);
+ 
+     insource	= st->insource;
+     SHIN	= st->SHIN;
+@@ -1704,7 +1739,7 @@ st_restore(void *xst)
+  * we don't chance it.	This occurs on ".cshrc"s and the like.
+  */
+ static void
+-srcunit(int unit, int onlyown, int hflg, Char **av)
++srcunit(int unit, int onlyown, int flg, Char **av)
+ {
+     struct saved_state st;
+ 
+@@ -1730,7 +1765,7 @@ srcunit(int unit, int onlyown, int hflg,
+     }
+ 
+     /* Save the current state and move us to a new state */
+-    st_save(&st, unit, hflg, NULL, av);
++    st_save(&st, unit, flg, NULL, av);
+ 
+     /*
+      * Now if we are allowing commands to be interrupted, we let ourselves be
+@@ -2069,7 +2104,7 @@ process(int catch)
+ 	 * elsewhere...
+ 	 */
+ 	if (enterhist || (catch && intty && !whyles && !tellwhat && !arun))
+-	    savehist(&paraml, enterhist > 1);
++	    savehist(&paraml, enterhist > 1 ? HIST_MERGE : 0);
+ 
+ 	if (Expand && seterr)
+ 	    Expand = 0;
+@@ -2156,21 +2191,28 @@ process(int catch)
+ void
+ dosource(Char **t, struct command *c)
+ {
++    (void) dosource_flg(t, c, 0);
++}
++
++int
++dosource_flg(Char **t, struct command *c, int flg)
++{
+     Char *f;
+-    int    hflg = 0;
+     char *file;
++    int fd;
++    int newflg = 0;
+ 
+     USE(c);
+     t++;
+     if (*t && eq(*t, STRmh)) {
+ 	if (*++t == NULL)
+ 	    stderror(ERR_NAME | ERR_HFLAG);
+-	hflg++;
++	newflg |= HIST_ONLY;
+     }
+     else if (*t && eq(*t, STRmm)) {
+     	if (*++t == NULL)
+ 	    stderror(ERR_NAME | ERR_MFLAG);
+-	hflg = 2;
++	newflg |= HIST_MERGE;
+     }
+ 
+     f = globone(*t++, G_ERROR);
+@@ -2178,9 +2220,16 @@ dosource(Char **t, struct command *c)
+     cleanup_push(file, xfree);
+     xfree(f);
+     t = glob_all_or_error(t);
+-    if ((!srcfile(file, 0, hflg, t)) && (!hflg) && (!bequiet))
++    fd = srcfile(file, 0, (flg | newflg), t);
++    if ((!fd) && (!newflg) && (!bequiet))
+ 	stderror(ERR_SYSTEM, file, strerror(errno));
+-    cleanup_until(file);
++
++    /* We need to preserve fd and it's cleaning routines on the top of the
++     * cleaning stack. Don't call cleanup_until() but clean it manually. */
++    cleanup_ignore(file);
++    xfree(file);
++
++    return fd; /* Valid/invalid file descriptor (>FSAVE, -1). Zero on error. */
+ }
+ 
+ /*
+diff -upr tcsh-6.18.00_orig/sh.decls.h tcsh-6.18.00_work/sh.decls.h
+--- tcsh-6.18.00_orig/sh.decls.h	2013-03-28 10:06:17.988859538 +0100
++++ tcsh-6.18.00_work/sh.decls.h	2013-03-28 10:06:42.897948590 +0100
+@@ -38,6 +38,7 @@
+  */
+ extern	Char	 	 *gethdir	(const Char *);
+ extern	void		  dosource	(Char **, struct command *);
++extern	int		  dosource_flg	(Char **, struct command *, int);
+ extern	void		  exitstat	(void);
+ extern	void		  goodbye	(Char **, struct command *);
+ extern	void		  importpath	(Char *);
+@@ -98,6 +99,7 @@ extern	void		  cleanup_until_mark(void);
+ extern	size_t		  cleanup_push_mark(void);
+ extern	void		  cleanup_pop_mark(size_t);
+ extern	void		  open_cleanup(void *);
++extern	void		  fcntl_cleanup(void *);
+ extern	void		  opendir_cleanup(void *);
+ extern	void		  sigint_cleanup(void *);
+ extern	void		  sigprocmask_cleanup(void *);
+@@ -219,7 +221,7 @@ extern  struct Hist 	 *enthist	(int, str
+ extern	void	 	  savehist	(struct wordent *, int);
+ extern	char		 *fmthist	(int, ptr_t);
+ extern	void		  rechist	(Char *, int);
+-extern	void		  loadhist	(Char *, int);
++extern	int		  loadhist	(Char *, int);
+ extern	void		  displayHistStats(const char *);
+ 
+ /*
+diff -upr tcsh-6.18.00_orig/sh.dol.c tcsh-6.18.00_work/sh.dol.c
+--- tcsh-6.18.00_orig/sh.dol.c	2013-03-28 10:06:17.988859538 +0100
++++ tcsh-6.18.00_work/sh.dol.c	2013-03-28 10:06:42.898948594 +0100
+@@ -1110,6 +1110,6 @@ again:
+     *obp = 0;
+     tmp = short2str(obuf);
+     (void) xwrite(0, tmp, strlen (tmp));
+-    (void) lseek(0, (off_t) 0, L_SET);
++    (void) lseek(0, (off_t) 0, SEEK_SET);
+     cleanup_until(&inheredoc);
+ }
+diff -upr tcsh-6.18.00_orig/sh.err.c tcsh-6.18.00_work/sh.err.c
+--- tcsh-6.18.00_orig/sh.err.c	2013-03-28 10:06:17.972859480 +0100
++++ tcsh-6.18.00_work/sh.err.c	2013-03-28 10:06:42.824948331 +0100
+@@ -514,6 +514,22 @@ open_cleanup(void *xptr)
+ }
+ 
+ void
++fcntl_cleanup(void *xptr)
++{
++    int *ptr;
++    struct flock fl;
++
++    ptr = xptr;
++
++    fl.l_type = F_UNLCK;
++    fl.l_whence = SEEK_SET;
++    fl.l_start = 0;
++    fl.l_len = 0;
++
++    fcntl(*ptr, F_SETLK, &fl);
++}
++
++void
+ opendir_cleanup(void *xdir)
+ {
+     DIR *dir;
+diff -upr tcsh-6.18.00_orig/sh.h tcsh-6.18.00_work/sh.h
+--- tcsh-6.18.00_orig/sh.h	2013-03-28 10:06:17.988859538 +0100
++++ tcsh-6.18.00_work/sh.h	2013-03-28 10:06:42.899948597 +0100
+@@ -50,6 +50,24 @@
+ # include <inttypes.h>
+ #endif
+ 
++#include <unistd.h>
++#include <fcntl.h>
++
++/*
++ * History flags.
++ */
++#define HIST_ONLY	0x001
++#define HIST_SAVE	0x002
++#define HIST_LOAD	0x004
++#define HIST_REV	0x008
++#define HIST_CLEAR	0x010
++#define HIST_MERGE	0x020
++#define HIST_TIME	0x040
++#define HIST_FILE_WRLCK	0x080 /* Write lock */
++#define HIST_FILE_RDLCK	0x100 /* Read lock */
++#define HIST_FILE_OPEN	0x200 /* Leave file open */
++#define HIST_FILE_LOCK	0x400 /* Leave file locked */
++
+ #if !defined(HAVE_STDINT_H) && !defined(HAVE_INTTYPES_H) && !defined(WINNT_NATIVE)
+ typedef unsigned long intptr_t;
+ #endif
+diff -upr tcsh-6.18.00_orig/sh.hist.c tcsh-6.18.00_work/sh.hist.c
+--- tcsh-6.18.00_orig/sh.hist.c	2013-03-28 10:06:17.967859465 +0100
++++ tcsh-6.18.00_work/sh.hist.c	2013-03-28 10:06:42.815948309 +0100
+@@ -44,14 +44,6 @@ Char HistLit = 0;
+ static	int	heq	(const struct wordent *, const struct wordent *);
+ static	void	hfree	(struct Hist *);
+ 
+-#define HIST_ONLY	0x01
+-#define HIST_SAVE	0x02
+-#define HIST_LOAD	0x04
+-#define HIST_REV	0x08
+-#define HIST_CLEAR	0x10
+-#define HIST_MERGE	0x20
+-#define HIST_TIME	0x40
+-
+ /*
+  * C shell
+  */
+@@ -143,7 +135,7 @@ discardExcess(int histlen)
+ void
+ savehist(
+   struct wordent *sp,
+-  int mflg)				/* true if -m (merge) specified */
++  int flg)
+ {
+     int histlen = 0;
+     Char   *cp;
+@@ -160,7 +152,7 @@ savehist(
+ 	histlen = histlen * 10 + *cp++ - '0';
+     }
+     if (sp)
+-        (void) enthist(++eventno, sp, 1, mflg, histlen);
++        (void) enthist(++eventno, sp, 1, flg, histlen);
+     discardExcess(histlen);
+ }
+ 
+@@ -933,7 +925,7 @@ enthist(
+   int event,				/* newly incremented global eventno */
+   struct wordent *lp,
+   int docopy,
+-  int mflg,				/* true if merge requested */
++  int flg,
+   int histlen)				/* -1 if unknown */
+ {
+     struct Hist *p = NULL, *pp = &Histlist, *pTime = NULL;
+@@ -953,7 +945,7 @@ enthist(
+ 		    Htime = p->Htime;
+                 /* If we are merging, and the old entry is at the place we want
+                  * to insert the new entry, then remember the place. */
+-                if (mflg && Htime != 0 && p->Hprev->Htime >= Htime)
++                if ((flg & HIST_MERGE) && Htime != 0 && p->Hprev->Htime >= Htime)
+                     pTime = p->Hprev;
+ 		if (!fastMergeErase)
+ 		    renumberHist(p);	/* Reset Href of subsequent entries */
+@@ -1012,7 +1004,7 @@ enthist(
+     /* The head of history list is the default insertion point.
+        If merging, advance insertion point, in pp, according to Htime. */
+     /* XXX -- In histdup=all, Htime values can be non-monotonic. */
+-    if (mflg) {                         /* merge according to np->Htime */
++    if (flg & HIST_MERGE) {             /* merge according to np->Htime */
+         pp = mergeInsertionPoint(np, pTime);
+         for (p = pp->Hnext; p && p->Htime == np->Htime; pp = p, p = p->Hnext) {
+             if (heq(&p->Hlex, &np->Hlex)) {
+@@ -1051,9 +1043,9 @@ hfree(struct Hist *hp)
+ }
+ 
+ PG_STATIC void
+-phist(struct Hist *hp, int hflg)
++phist(struct Hist *hp, int flg)
+ {
+-    if (hflg & HIST_ONLY) {
++    if (flg & HIST_ONLY) {
+ 	int old_output_raw;
+ 
+        /*
+@@ -1065,7 +1057,7 @@ phist(struct Hist *hp, int hflg)
+ 	old_output_raw = output_raw;
+         output_raw = 1;
+ 	cleanup_push(&old_output_raw, output_raw_restore);
+-	if (hflg & HIST_TIME)
++	if (flg & HIST_TIME)
+ 	    /* 
+ 	     * Make file entry with history time in format:
+ 	     * "+NNNNNNNNNN" (10 digits, left padded with ascii '0') 
+@@ -1096,7 +1088,7 @@ phist(struct Hist *hp, int hflg)
+ }
+ 
+ PG_STATIC void
+-dophist(int n, int hflg)
++dophist(int n, int flg)
+ {
+     struct Hist *hp;
+     if (setintr) {
+@@ -1105,7 +1097,7 @@ dophist(int n, int hflg)
+ 	pintr_push_enable(&old_pintr_disabled);
+ 	cleanup_until(&old_pintr_disabled);
+     }
+-    if ((hflg & HIST_REV) == 0) {
++    if (!(flg & HIST_REV)) {
+ 	/* Since the history list is stored most recent first, non-reversing
+ 	 * print needs to print (backwards) up the list. */
+ 	if ((unsigned)n >= histCount)
+@@ -1119,10 +1111,10 @@ dophist(int n, int hflg)
+ 	if (hp == NULL)
+ 	    return;			/* nothing to print */
+ 	for (; hp != &Histlist; hp = hp->Hprev)
+-	    phist(hp, hflg);
++	    phist(hp, flg);
+     } else {
+ 	for (hp = Histlist.Hnext; n-- > 0 && hp != NULL; hp = hp->Hnext)
+-	    phist(hp, hflg);
++	    phist(hp, flg);
+     }
+ }
+ 
+@@ -1130,7 +1122,7 @@ dophist(int n, int hflg)
+ void
+ dohist(Char **vp, struct command *c)
+ {
+-    int     n, hflg = 0;
++    int     n, flg = 0;
+ 
+     USE(c);
+     if (getn(varval(STRhistory)) == 0)
+@@ -1141,40 +1133,40 @@ dohist(Char **vp, struct command *c)
+ 	while (*++vp2)
+ 	    switch (*vp2) {
+ 	    case 'c':
+-		hflg |= HIST_CLEAR;
++		flg |= HIST_CLEAR;
+ 		break;
+ 	    case 'h':
+-		hflg |= HIST_ONLY;
++		flg |= HIST_ONLY;
+ 		break;
+ 	    case 'r':
+-		hflg |= HIST_REV;
++		flg |= HIST_REV;
+ 		break;
+ 	    case 'S':
+-		hflg |= HIST_SAVE;
++		flg |= HIST_SAVE;
+ 		break;
+ 	    case 'L':
+-		hflg |= HIST_LOAD;
++		flg |= HIST_LOAD;
+ 		break;
+ 	    case 'M':
+-	    	hflg |= HIST_MERGE;
++	    	flg |= HIST_MERGE;
+ 		break;
+ 	    case 'T':
+-	    	hflg |= HIST_TIME;
++	    	flg |= HIST_TIME;
+ 		break;
+ 	    default:
+ 		stderror(ERR_HISTUS, "chrSLMT");
+ 		break;
+ 	    }
+     }
+-    if (hflg & HIST_CLEAR) {
++    if (flg & HIST_CLEAR) {
+         struct Hist *np, *hp;
+         for (hp = &Histlist; (np = hp->Hnext) != NULL;)
+             hremove(np), hfree(np);
+     }
+ 
+-    if (hflg & (HIST_LOAD | HIST_MERGE))
+-	loadhist(*vp, (hflg & HIST_MERGE) ? 1 : 0);
+-    else if (hflg & HIST_SAVE)
++    if (flg & (HIST_LOAD | HIST_MERGE))
++	loadhist(*vp, (flg | HIST_FILE_RDLCK));
++    else if (flg & HIST_SAVE)
+ 	rechist(*vp, 1);
+     else {
+ 	if (*vp)
+@@ -1182,7 +1174,7 @@ dohist(Char **vp, struct command *c)
+ 	else {
+ 	    n = getn(varval(STRhistory));
+ 	}
+-	dophist(n, hflg);
++	dophist(n, flg);
+     }
+ }
+ 
+@@ -1224,8 +1216,8 @@ fmthist(int fmt, ptr_t ptr)
+ void
+ rechist(Char *fname, int ref)
+ {
+-    Char    *snum;
+-    int     fp, ftmp, oldidfds;
++    Char   *snum;
++    int    fd = -1, ftmp, oldidfds;
+     struct varent *shist;
+     static Char   *dumphist[] = {STRhistory, STRmhT, 0, 0};
+ 
+@@ -1255,15 +1247,12 @@ rechist(Char *fname, int ref)
+      * with numerous shells being in simultaneous use. Imagine
+      * any kind of window system. All these shells 'share' the same 
+      * ~/.history file for recording their command line history. 
+-     * Currently the automatic merge can only succeed when the shells
+-     * nicely quit one after another. 
+-     *
+-     * Users that like to nuke their environment require here an atomic
+-     * 	loadhist-creat-dohist(dumphist)-close
+-     * sequence.
+      *
+-     * jw.
+-     */ 
++     * Atomic merge loadhist-creat/ftrunc-dohist(dumphist)-close
++     * implemented using fcntl (shared readers, exclusive writer)
++     * by Vojtech Vitek (V-Teq) <vvitek@redhat.com>.
++     */
++
+     /*
+      * We need the didfds stuff before loadhist otherwise
+      * exec in a script will fail to print if merge is set.
+@@ -1271,32 +1260,42 @@ rechist(Char *fname, int ref)
+      */
+     oldidfds = didfds;
+     didfds = 0;
+-    if ((shist = adrof(STRsavehist)) != NULL && shist->vec != NULL)
+-	if (shist->vec[1] && eq(shist->vec[1], STRmerge))
+-	    loadhist(fname, 1);
+-
+-    fp = xcreat(short2str(fname), 0600);
+-    cleanup_until(fname);
+-    if (fp == -1) {
+-	didfds = oldidfds;
+-	return;
++    if (((shist = adrof(STRsavehist)) != NULL && shist->vec != NULL) &&
++        (shist->vec[1] && eq(shist->vec[1], STRmerge))) {
++	/* Read .history file, leave it's fd open for writing. */
++	fd = loadhist(fname, HIST_MERGE|HIST_FILE_WRLCK|HIST_FILE_OPEN|HIST_FILE_LOCK);
++	if (fd > 0) {
++	    /* Truncate the .history file. */
++	    (void) ftruncate(fd, 0);
++	    (void) lseek(fd, (off_t) 0, SEEK_SET);
++	}
++    }
++    if (fd <= 0) {
++        /* Open .history file for writing (if not open yet). */
++	fd = xopen(short2str(fname), O_LARGEFILE|O_CREAT|O_WRONLY|O_TRUNC, 0600);
++	if (fd != -1)
++	    cleanup_push(&fd, open_cleanup);
++    }
++    if (fd != -1) {
++	ftmp = SHOUT;
++	SHOUT = fd;
++	dumphist[2] = snum;
++	/* Write history to the .history file. */
++	dohist(dumphist, NULL);
++	SHOUT = ftmp;
+     }
+-    ftmp = SHOUT;
+-    SHOUT = fp;
+-    dumphist[2] = snum;
+-    dohist(dumphist, NULL);
+-    xclose(fp);
+-    SHOUT = ftmp;
+     didfds = oldidfds;
++    cleanup_until(fname);
+ }
+ 
+ 
+ /* This is the entry point for loading history data from a file. */
+-void
+-loadhist(Char *fname, int mflg)
++int
++loadhist(Char *fname, int flg)
+ {
+     static Char   *loadhist_cmd[] = {STRsource, NULL, NULL, NULL};
+-    loadhist_cmd[1] = mflg ? STRmm : STRmh;
++    int fd;
++    loadhist_cmd[1] = (flg & HIST_MERGE) ? STRmm : STRmh;
+ 
+     if (fname != NULL)
+ 	loadhist_cmd[2] = fname;
+@@ -1305,15 +1304,17 @@ loadhist(Char *fname, int mflg)
+     else
+ 	loadhist_cmd[2] = STRtildothist;
+ 
+-    dosource(loadhist_cmd, NULL);
++    fd = dosource_flg(loadhist_cmd, NULL, flg);
+ 
+-    /* During history merging (enthist sees mflg set), we disable management of
+-     * Hnum and Href (because fastMergeErase is true).  So now reset all the
++    /* During history merging (enthist sees merge flag), we disable management
++     * of Hnum and Href (because fastMergeErase is true).  So now reset all the
+      * values based on the final ordering of the history list. */
+-    if (mflg) {
++    if (flg & HIST_MERGE) {
+ 	int n = eventno;
+         struct Hist *hp = &Histlist;
+         while ((hp = hp->Hnext))
+ 	    hp->Hnum = hp->Href = n--;
+     }
++
++    return fd; /* Valid/invalid file descriptor (>FSAVE, -1). Zero on error. */
+ }
+diff -upr tcsh-6.18.00_orig/sh.lex.c tcsh-6.18.00_work/sh.lex.c
+--- tcsh-6.18.00_orig/sh.lex.c	2013-03-28 10:06:17.971859478 +0100
++++ tcsh-6.18.00_work/sh.lex.c	2013-03-28 10:06:42.820948316 +0100
+@@ -1595,7 +1595,7 @@ wide_read(int fildes, Char *buf, size_t
+     /* Throwing away possible partial multibyte characters on error if the
+        stream is not seekable */
+     err = errno;
+-    lseek(fildes, -(off_t)partial, L_INCR);
++    lseek(fildes, -(off_t)partial, SEEK_CUR);
+     errno = err;
+     return res != 0 ? res : r;
+ }
+@@ -1610,7 +1610,7 @@ bgetc(void)
+     if (cantell) {
+ 	if (fseekp < fbobp || fseekp > feobp) {
+ 	    fbobp = feobp = fseekp;
+-	    (void) lseek(SHIN, fseekp, L_SET);
++	    (void) lseek(SHIN, fseekp, SEEK_SET);
+ 	}
+ 	if (fseekp == feobp) {
+ #ifdef WIDE_STRINGS
+@@ -1814,7 +1814,7 @@ btell(struct Ain *l)
+ void
+ btoeof(void)
+ {
+-    (void) lseek(SHIN, (off_t) 0, L_XTND);
++    (void) lseek(SHIN, (off_t) 0, SEEK_END);
+     aret = TCSH_F_SEEK;
+     fseekp = feobp;
+     alvec = NULL;
+@@ -1832,7 +1832,7 @@ settell(void)
+     cantell = 0;
+     if (arginp || onelflg || intty)
+ 	return;
+-    if ((x = lseek(SHIN, (off_t) 0, L_INCR)) == -1)
++    if ((x = lseek(SHIN, (off_t) 0, SEEK_CUR)) == -1)
+ 	return;
+     fbuf = xcalloc(2, sizeof(Char **));
+     fblocks = 1;
+diff -upr tcsh-6.18.00_orig/sh.sem.c tcsh-6.18.00_work/sh.sem.c
+--- tcsh-6.18.00_orig/sh.sem.c	2013-03-28 10:06:17.970859477 +0100
++++ tcsh-6.18.00_work/sh.sem.c	2013-03-28 10:06:42.819948308 +0100
+@@ -892,7 +892,7 @@ doio(struct command *t, int *pipein, int
+ 	    fd = xopen(tmp, O_WRONLY|O_APPEND|O_LARGEFILE);
+ #else /* !O_APPEND */
+ 	    fd = xopen(tmp, O_WRONLY|O_LARGEFILE);
+-	    (void) lseek(fd, (off_t) 0, L_XTND);
++	    (void) lseek(fd, (off_t) 0, SEEK_END);
+ #endif /* O_APPEND */
+ 	}
+ 	else

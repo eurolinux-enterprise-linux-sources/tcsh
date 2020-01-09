@@ -1,0 +1,205 @@
+From 047308b5ea1d1ff5ae5385806fb5a2773d1a1ffc Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Mon, 8 Sep 2014 19:18:55 +0000
+Subject: [PATCH 1/4] PR/377: Angelo Bonet: Fix source memory leak
+
+---
+ sh.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sh.c b/sh.c
+index 498bf25..911930f 100644
+--- a/sh.c
++++ b/sh.c
+@@ -2222,6 +2222,7 @@ dosource_flg(Char **t, struct command *c, int flg)
+     cleanup_push(file, xfree);
+     xfree(f);
+     t = glob_all_or_error(t);
++    cleanup_push(t, blk_cleanup);
+     fd = srcfile(file, 0, (flg | newflg), t);
+     if ((!fd) && (!newflg) && (!bequiet))
+ 	stderror(ERR_SYSTEM, file, strerror(errno));
+-- 
+2.5.5
+
+
+From 5aa59699bc9d5ae24ef575cfc7239c34d7ec5063 Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Wed, 9 Dec 2015 15:06:19 +0000
+Subject: [PATCH 2/4] - make backeval use its own paraml - introduce initlex()
+ and call freelex() before calling lex()
+
+---
+ sh.c       |  2 ++
+ sh.decls.h |  1 +
+ sh.exp.c   |  1 +
+ sh.glob.c  | 14 +++++++++-----
+ sh.lex.c   |  7 +++++++
+ 5 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index 911930f..14e8433 100644
+--- a/sh.c
++++ b/sh.c
+@@ -273,6 +273,7 @@ main(int argc, char **argv)
+ #endif
+ 
+     nlsinit();
++    initlex(&paraml);
+ 
+ #ifdef MALLOC_TRACE
+     mal_setstatsfile(fdopen(dmove(xopen("/tmp/tcsh.trace", 
+@@ -2074,6 +2075,7 @@ process(int catch)
+ 	 */
+ 	if (setintr)
+ 	    pintr_push_enable(&old_pintr_disabled);
++	freelex(&paraml);
+ 	hadhist = lex(&paraml);
+ 	if (setintr)
+ 	    cleanup_until(&old_pintr_disabled);
+diff --git a/sh.decls.h b/sh.decls.h
+index fb15a01..ac6996b 100644
+--- a/sh.decls.h
++++ b/sh.decls.h
+@@ -238,6 +238,7 @@ extern	void		  btell		(struct Ain *);
+ extern	void		  btoeof	(void);
+ extern	void		  copylex	(struct wordent *, struct wordent *);
+ extern	Char		 *domod		(Char *, Char);
++extern	void		  initlex	(struct wordent *);
+ extern	void		  freelex	(struct wordent *);
+ extern	int		  lex		(struct wordent *);
+ extern	void		  lex_cleanup	(void *);
+diff --git a/sh.exp.c b/sh.exp.c
+index abb1764..5419aeb 100644
+--- a/sh.exp.c
++++ b/sh.exp.c
+@@ -967,6 +967,7 @@ evalav(Char **v)
+     }
+     hp->prev = wdp;
+     cleanup_push(&paraml1, lex_cleanup);
++    initlex(&paraml1);
+     alias(&paraml1);
+     t = syntax(paraml1.next, &paraml1, 0);
+     cleanup_push(t, syntax_cleanup);
+diff --git a/sh.glob.c b/sh.glob.c
+index a2755ad..fb07657 100644
+--- a/sh.glob.c
++++ b/sh.glob.c
+@@ -760,6 +760,9 @@ backeval(struct blk_buf *bb, struct Strbuf *word, Char *cp, int literal)
+ 	omark = cleanup_push_mark();
+ 	getexit(osetexit);
+ 	for (;;) {
++	    struct wordent paraml1;
++	    initlex(&paraml1);
++
+ 	    (void) setexit();
+ 	    justpr = 0;
+ 	    
+@@ -775,12 +778,13 @@ backeval(struct blk_buf *bb, struct Strbuf *word, Char *cp, int literal)
+ 		seterr = NULL;
+ 	    }
+ 
+-	    (void) lex(&paraml);
+-	    cleanup_push(&paraml, lex_cleanup);
++	    freelex(&paraml1);
++	    (void) lex(&paraml1);
++	    cleanup_push(&paraml1, lex_cleanup);
+ 	    if (seterr)
+ 		stderror(ERR_OLD);
+-	    alias(&paraml);
+-	    t = syntax(paraml.next, &paraml, 0);
++	    alias(&paraml1);
++	    t = syntax(paraml1.next, &paraml1, 0);
+ 	    if (t == NULL)
+ 		return;
+ 	    cleanup_push(t, syntax_cleanup);
+@@ -801,7 +805,7 @@ backeval(struct blk_buf *bb, struct Strbuf *word, Char *cp, int literal)
+ #endif
+ 	    execute(t, -1, NULL, NULL, TRUE);
+ 
+-	    cleanup_until(&paraml);
++	    cleanup_until(&paraml1);
+ 	}
+     }
+     cleanup_until(&pvec[1]);
+diff --git a/sh.lex.c b/sh.lex.c
+index 011d67e..6f18c42 100644
+--- a/sh.lex.c
++++ b/sh.lex.c
+@@ -258,6 +258,13 @@ copylex(struct wordent *hp, struct wordent *fp)
+ }
+ 
+ void
++initlex(struct wordent *vp)
++{
++	vp->prev = vp;
++	vp->next = vp;
++}
++
++void
+ freelex(struct wordent *vp)
+ {
+     struct wordent *fp;
+-- 
+2.5.5
+
+
+From 1ff9f4faaab93218655fcb99279c8a04bebcea73 Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Wed, 9 Dec 2015 17:17:43 +0000
+Subject: [PATCH 3/4] Call initlex() sooner, instead of hand-crafted code.
+
+---
+ sh.exp.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/sh.exp.c b/sh.exp.c
+index 5419aeb..3d8b7f5 100644
+--- a/sh.exp.c
++++ b/sh.exp.c
+@@ -954,8 +954,7 @@ evalav(Char **v)
+     struct wordent *wdp = hp;
+ 
+     setcopy(STRstatus, STR0, VAR_READWRITE);
+-    hp->prev = hp->next = hp;
+-    hp->word = STRNULL;
++    initlex(hp);
+     while (*v) {
+ 	struct wordent *new = xcalloc(1, sizeof *wdp);
+ 
+@@ -967,7 +966,6 @@ evalav(Char **v)
+     }
+     hp->prev = wdp;
+     cleanup_push(&paraml1, lex_cleanup);
+-    initlex(&paraml1);
+     alias(&paraml1);
+     t = syntax(paraml1.next, &paraml1, 0);
+     cleanup_push(t, syntax_cleanup);
+-- 
+2.5.5
+
+
+From b9bfd7639db2568956a9f28e0e4c41f109016e58 Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Wed, 9 Dec 2015 17:17:55 +0000
+Subject: [PATCH 4/4] Initialize word in initlex()
+
+---
+ sh.lex.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sh.lex.c b/sh.lex.c
+index 6f18c42..2bb7db8 100644
+--- a/sh.lex.c
++++ b/sh.lex.c
+@@ -260,6 +260,7 @@ copylex(struct wordent *hp, struct wordent *fp)
+ void
+ initlex(struct wordent *vp)
+ {
++	vp->word = STRNULL;
+ 	vp->prev = vp;
+ 	vp->next = vp;
+ }
+-- 
+2.5.5
+
