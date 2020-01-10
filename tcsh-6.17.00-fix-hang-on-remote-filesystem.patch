@@ -1,0 +1,169 @@
+From ad51c487aeacd2557e2c11405ec6bfac17378b63 Mon Sep 17 00:00:00 2001
+From: "David Kaspar [Dee'Kej]" <dkaspar@redhat.com>
+Date: Tue, 25 Oct 2016 15:39:01 +0200
+Subject: [PATCH] Prevent locking of .history file when it is located on remote
+ FS
+
+---
+ sh.c       | 68 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++--
+ sh.h       | 31 ++++++++++++++++++++++++++++
+ tc.const.c |  1 +
+ 3 files changed, 98 insertions(+), 2 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index 1227242..bbbc06a 100644
+--- a/sh.c
++++ b/sh.c
+@@ -1420,6 +1420,70 @@ int
+ srcfile(const char *f, int onlyown, int flg, Char **av)
+ {
+     int *unit;
++    int lock = 1;   /* We still lock .history file by default. */
++
++    /* Are we required to lock the file? */
++    if (flg & (FD_WRLCK | FD_RDLCK)) {
++        int expl_lock = 0;
++        struct varent *shist;
++
++        /* Explicit override to lock on network file system? */
++        if ((shist = adrof(STRsavehist)) != NULL && shist->vec != NULL) {
++            size_t i;
++
++            for (i = 1; shist->vec[i]; i++) {
++                if (eq(shist->vec[i], STRlock)) {
++                    expl_lock = 1;
++                    break;
++                }
++            }
++        }
++
++        if (expl_lock == 0) {
++            struct statfs fsinfo;
++
++            /* Successful call to statfs()? */
++            if (statfs(f, &fsinfo) == 0) {
++                /* Any network type file system? */
++                switch (fsinfo.f_type) {
++                    case S_MAGIC_ACFS :
++                    case S_MAGIC_AFS :
++                    case S_MAGIC_AUFS :
++                    case S_MAGIC_CEPH :
++                    case S_MAGIC_CIFS :
++                    case S_MAGIC_CODA :
++                    case S_MAGIC_FHGFS :
++                    case S_MAGIC_FUSEBLK :
++                    case S_MAGIC_FUSECTL :
++                    case S_MAGIC_GFS :
++                    case S_MAGIC_GPFS :
++                    case S_MAGIC_IBRIX :
++                    case S_MAGIC_KAFS :
++                    case S_MAGIC_LUSTRE :
++                    case S_MAGIC_NCP :
++                    case S_MAGIC_NFS :
++                    case S_MAGIC_NFSD :
++                    case S_MAGIC_OCFS2 :
++                    case S_MAGIC_OVERLAYFS :
++                    case S_MAGIC_PANFS :
++                    case S_MAGIC_PIPEFS :
++                    case S_MAGIC_SMB :
++                    case S_MAGIC_SNFS :
++                    case S_MAGIC_VMHGFS :
++                    case S_MAGIC_VXFS :
++                        lock = 0;             /* Do not lock (it might cause hanging). */
++                        break;
++
++                    default :
++                        break;
++                }
++            }
++            else {
++              /* Call failed. Do not lock -- it's safer approach. */
++              lock = 0;
++            }
++        }
++    }
+ 
+     unit = xmalloc(sizeof(*unit));
+     cleanup_push(unit, xfree);
+@@ -1432,7 +1496,7 @@ srcfile(const char *f, int onlyown, int flg, Char **av)
+     *unit = dmove(*unit, -1);
+     (void) close_on_exec(*unit, 1);
+ 
+-    if (flg & (FD_WRLCK | FD_RDLCK)) {
++    if ((flg & (FD_WRLCK | FD_RDLCK)) && lock) {
+ 	struct flock fl;
+ 
+ 	fl.l_type = (flg & FD_WRLCK) ? F_WRLCK : F_RDLCK;
+@@ -1448,7 +1512,7 @@ srcfile(const char *f, int onlyown, int flg, Char **av)
+     srcunit(*unit, onlyown, (flg & (SRC_HFLAG | SRC_MFLAG)), av);
+ 
+     /* Unlock the unit, if we don't want to leave it locked (or open). */
+-    if ((flg & (FD_WRLCK | FD_RDLCK)) &&
++    if (((flg & (FD_WRLCK | FD_RDLCK)) && lock) &&
+         (!(flg & FD_LEAVE_LCKD) || !(flg & FD_LEAVE_OPEN)))
+ 	cleanup_until(unit); /* fcntl_cleanup */
+ 
+diff --git a/sh.h b/sh.h
+index 64566cc..45a446d 100644
+--- a/sh.h
++++ b/sh.h
+@@ -37,6 +37,7 @@
+ 
+ #include <stddef.h>
+ #include <signal.h>
++#include <sys/vfs.h>
+ 
+ #ifdef HAVE_ICONV
+ # include <iconv.h>
+@@ -67,6 +68,36 @@
+ #define FD_LEAVE_OPEN	0x10 /* Leave file open */
+ #define FD_LEAVE_LCKD	0x20 /* Leave file locked */
+ 
++/*
++ * Remote filesystem types magic numbers, taken from coreutils-8.25
++ * (src/fs-is-local-h).
++ */
++#define S_MAGIC_ACFS          0x61636673
++#define S_MAGIC_AFS           0x5346414F
++#define S_MAGIC_AUFS          0x61756673
++#define S_MAGIC_CEPH          0x00C36400
++#define S_MAGIC_CIFS          0xFF534D42
++#define S_MAGIC_CODA          0x73757245
++#define S_MAGIC_FHGFS         0x19830326
++#define S_MAGIC_FUSEBLK       0x65735546
++#define S_MAGIC_FUSECTL       0x65735543
++#define S_MAGIC_GFS           0x01161970
++#define S_MAGIC_GPFS          0x47504653
++#define S_MAGIC_IBRIX         0x013111A8
++#define S_MAGIC_KAFS          0x6B414653
++#define S_MAGIC_LUSTRE        0x0BD00BD0
++#define S_MAGIC_NCP           0x564C
++#define S_MAGIC_NFS           0x6969
++#define S_MAGIC_NFSD          0x6E667364
++#define S_MAGIC_OCFS2         0x7461636F
++#define S_MAGIC_OVERLAYFS     0x794C7630
++#define S_MAGIC_PANFS         0xAAD7AAEA
++#define S_MAGIC_PIPEFS        0x50495045
++#define S_MAGIC_SMB           0x517B
++#define S_MAGIC_SNFS          0xBEEFDEAD
++#define S_MAGIC_VMHGFS        0xBACBACBC
++#define S_MAGIC_VXFS          0xA501FCF5
++
+ #if !defined(HAVE_STDINT_H) && !defined(HAVE_INTTYPES_H) && !defined(WINNT_NATIVE)
+ typedef unsigned long intptr_t;
+ #endif
+diff --git a/tc.const.c b/tc.const.c
+index 8a62919..24fcafa 100644
+--- a/tc.const.c
++++ b/tc.const.c
+@@ -113,6 +113,7 @@ Char STRmhT[]		= { '-', 'h', 'T', '\0' };
+ Char STRmm[]		= { '-', 'm', '\0' };
+ Char STRmr[]		= { '-', 'r', '\0' };
+ Char STRmerge[]		= { 'm', 'e', 'r', 'g', 'e', '\0' };
++Char STRlock[]		= { 'l', 'o', 'c', 'k', '\0' };
+ Char STRtildothist[]	= { '~', '/', '.', 'h', 'i', 's', 't', 'o', 'r', 
+ 			    'y', '\0' };
+ 
+-- 
+2.7.4
+

@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.17
-Release: 35%{?dist}.1
+Release: 38%{?dist}
 License: BSD
 Group: System Environment/Shells
 Source: ftp://ftp.astron.com/pub/tcsh/%{name}-%{version}.00.tar.gz
@@ -42,6 +42,7 @@ Patch42: tcsh-6.17.00-handle-interrupt-in-eval.patch
 Patch43: tcsh-6.17.00-wide-characters-print.patch
 Patch44: tcsh-6.17.00-use-long-long-for-calculations.patch
 Patch45: tcsh-6.17.00-quote-backslashes-properly.patch
+Patch46: tcsh-6.17.00-fix-hang-on-remote-filesystem.patch
 
 Provides: csh = %{version}
 Requires(post): grep
@@ -95,6 +96,7 @@ like syntax.
 %patch43 -p1 -b .wide-characters-print
 %patch44 -p1 -b .use-long-long-for-calculations
 %patch45 -p1 -b .quote-backslashes-properly
+%patch46 -p1 -b .fix-hang-on-remote-filesystem
 
 for i in Fixes WishList; do
  iconv -f iso-8859-1 -t utf-8 "$i" > "${i}_" && \
@@ -168,9 +170,15 @@ fi
 %{_mandir}/man1/*.1*
 
 %changelog
-* Tue Jul 19 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-35.el6_8.1
-- fix regression with 'jobs' builtin output not going to stdout (bug #1357127)
-- fix several regressions in tcsh-6.17.00-quote-backslashes-properly.patch (bug #1357126)
+* Thu Nov 24 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-38
+- fix regression in tcsh-6.17.00-fix-hang-on-remote-filesystem.patch (#885901)
+
+* Wed Oct 26 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-37
+- fix hanging of tcsh when .history file is located on remote filesystem (#885901)
+
+* Fri Jul 15 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-36
+- fix regression with 'jobs' builtin output not going to stdout (#1338986)
+- fix several regressions in tcsh-6.17.00-quote-backslashes-properly.patch (#1334751)
 
 * Sun Mar 20 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-35
 - quote backslashes properly to preserve them in `...` expressions
