@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.17
-Release: 35%{?dist}
+Release: 35%{?dist}.1
 License: BSD
 Group: System Environment/Shells
 Source: ftp://ftp.astron.com/pub/tcsh/%{name}-%{version}.00.tar.gz
@@ -168,6 +168,10 @@ fi
 %{_mandir}/man1/*.1*
 
 %changelog
+* Tue Jul 19 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-35.el6_8.1
+- fix regression with 'jobs' builtin output not going to stdout (bug #1357127)
+- fix several regressions in tcsh-6.17.00-quote-backslashes-properly.patch (bug #1357126)
+
 * Sun Mar 20 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-35
 - quote backslashes properly to preserve them in `...` expressions
   Resolves: #1301857
