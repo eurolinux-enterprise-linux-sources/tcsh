@@ -1,0 +1,446 @@
+From 14182021f9f77fc9dc61bbed0ef996a4e35a08a5 Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Thu, 14 Apr 2011 18:25:25 +0000
+Subject: [PATCH 1/7] Add $anyerror and Fix PR/110 "exit status should be the
+ exit status of the last command in a pipeline or backquote.
+
+---
+ sh.h             | 1 +
+ sh.proc.c        | 7 +++++++
+ sh.proc.h        | 1 +
+ sh.set.c         | 5 +++++
+ tc.const.c       | 1 +
+ tcsh.man         | 7 ++++++-
+ tests/lexical.at | 4 ++--
+ tests/subst.at   | 2 +-
+ tests/syntax.at  | 2 +-
+ 9 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/sh.h b/sh.h
+index 617ef77..0f39d27 100644
+--- a/sh.h
++++ b/sh.h
+@@ -574,6 +574,7 @@ EXTERN int    havhash IZERO;	/* path hashing is available */
+ EXTERN int    editing IZERO;	/* doing filename expansion and line editing */
+ EXTERN int    noediting IZERO;	/* initial $term defaulted to noedit */
+ EXTERN int    bslash_quote IZERO;/* PWP: tcsh-style quoting?  (in sh.c) */
++EXTERN int    anyerror IZERO;	/* propagate errors from pipelines/backq */
+ EXTERN int    compat_expr IZERO;/* csh-style expressions? */
+ EXTERN int    isoutatty IZERO;	/* is SHOUT a tty */
+ EXTERN int    isdiagatty IZERO;/* is SHDIAG a tty */
+diff --git a/sh.proc.c b/sh.proc.c
+index 502f1eb..2576e9f 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -552,6 +552,11 @@ pjwait(struct process *pp)
+     reason = 0;
+     fp = pp;
+     do {
++	/* In case of pipelines only the result of the last
++	 * command should be taken in account */
++	if (!anyerror && !(fp->p_flags & PBRACE)
++		&& ((fp->p_flags & PPOU) || (fp->p_flags & PBACKQ)))
++	    continue;
+ 	if (fp->p_reason)
+ 	    reason = fp->p_flags & (PSIGNALED | PINTERRUPTED) ?
+ 		fp->p_reason | META : fp->p_reason;
+@@ -748,6 +753,8 @@ palloc(pid_t pid, struct command *t)
+ 	pp->p_flags |= PBACKQ;
+     if (t->t_dflg & F_HUP)
+ 	pp->p_flags |= PHUP;
++    if (t->t_dcom && t->t_dcom[0] && (*t->t_dcom[0] == '{'))
++	pp->p_flags |= PBRACE;
+     if (cmdmax == 0)
+ 	morecommand(CMD_INIT);
+     cmdp = cmdstr;
+diff --git a/sh.proc.h b/sh.proc.h
+index 48a3771..314270b 100644
+--- a/sh.proc.h
++++ b/sh.proc.h
+@@ -102,6 +102,7 @@ struct process {
+ #define	PNEEDNOTE	(1<<15)	/* notify as soon as practical */
+ #define PBACKQ		(1<<16)	/* Process is `` evaluation */
+ #define PHUP		(1<<17)	/* Process is marked for SIGHUP on exit */
++#define PBRACE		(1<<18)	/* Process is {} evaluation */
+ 
+ /* defines for arguments to pprint */
+ #define	NUMBER		01
+diff --git a/sh.set.c b/sh.set.c
+index 70b54dc..a04d83c 100644
+--- a/sh.set.c
++++ b/sh.set.c
+@@ -100,6 +100,9 @@ update_vars(Char *vp)
+     else if (eq(vp, STRloginsh)) {
+ 	loginsh = 1;
+     }
++    else if (eq(vp, STRanyerror)) {
++	anyerror = 1;
++    }
+     else if (eq(vp, STRsymlinks)) {
+ 	Char *pn = varval(vp);
+ 
+@@ -757,6 +760,8 @@ unset(Char **v, struct command *c)
+ 	HistLit = 0;
+     if (adrof(STRloginsh) == 0)
+ 	loginsh = 0;
++    if (adrof(STRanyerror) == 0)
++	anyerror = 0;
+     if (adrof(STRwordchars) == 0)
+ 	word_chars = STR_WORD_CHARS;
+     if (adrof(STRedit) == 0)
+diff --git a/tc.const.c b/tc.const.c
+index ce2d18b..0c9e6d0 100644
+--- a/tc.const.c
++++ b/tc.const.c
+@@ -43,6 +43,7 @@ Char STRrootdefautologout[] = { '1', '5', '\0' };
+ #endif
+ Char STRautomatic[]	= { 'a', 'u', 't', 'o', 'm', 'a', 't', 'i', 'c',
+ 			    '\0' };
++Char STRanyerror[]	= { 'a', 'n', 'y', 'e', 'r', 'r', 'o', 'r', '\0' };
+ Char STRhangup[]	= { 'h', 'a', 'n', 'g', 'u', 'p', '\0' };
+ Char STRaout[]		= { 'a', '.', 'o', 'u', 't', '\0' };
+ Char STRtty[]		= { 't', 't', 'y', '\0' };
+diff --git a/tcsh.man b/tcsh.man
+index f2ae4cc..e44e2c2 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -4251,7 +4251,12 @@ Reset to 1 in login shells.
+ See also \fBloginsh\fR.
+ .TP 8
+ .B status
+-The status returned by the last command.  If it terminated
++The status returned by the last command, unless the variable
++.B anyerror
++is set, and any error in a pipeline or a backquote expansion will be
++propagated (this was the default
++.B csh
++behavior). If it terminated
+ abnormally, then 0200 is added to the status.  Builtin commands
+ which fail return exit status `1', all other builtin commands
+ return status `0'.
+diff --git a/tests/lexical.at b/tests/lexical.at
+index 70a2575..02534fe 100644
+--- a/tests/lexical.at
++++ b/tests/lexical.at
+@@ -57,7 +57,7 @@ echo "&|;<>()&||<<>>space tab	end"
+ set verbose
+ echo `&|;<>()&||<<>>space tab	end`
+ ]])
+-AT_CHECK([tcsh -f nosplit.csh], 1,
++AT_CHECK([tcsh -f nosplit.csh], 0,
+ [&|;<>()&||<<>>space tab	end
+ &|;<>()&||<<>>space tab	end
+ &|;<>()&||<<>>space tab	end
+@@ -132,7 +132,7 @@ AT_CHECK([tcsh -f -c "echo !OK"], 1, ,
+ AT_CHECK([tcsh -f -c 'echo "$OK"'], 1, , [OK: Undefined variable.
+ ])
+ 
+-AT_CHECK([tcsh -f -c 'echo "`OK`"'], 1, [
++AT_CHECK([tcsh -f -c 'echo "`OK`"'], 0, [
+ ],
+ [OK: Command not found.
+ ])
+diff --git a/tests/subst.at b/tests/subst.at
+index 71feb97..a59171b 100644
+--- a/tests/subst.at
++++ b/tests/subst.at
+@@ -14,7 +14,7 @@ set csubstnonl
+ echo `echo 1; \\
+   echo 2`
+ ]])
+-AT_CHECK([tcsh -f backq.csh], 1,
++AT_CHECK([tcsh -f backq.csh], 0,
+ [4
+ 2
+ 1 2
+diff --git a/tests/syntax.at b/tests/syntax.at
+index 2a2abd0..4908ba3 100644
+--- a/tests/syntax.at
++++ b/tests/syntax.at
+@@ -156,7 +156,7 @@ AT_CHECK([cat output], ,
+ [OK
+ ])
+ 
+-AT_CHECK([tcsh -f -c '(echo $this_does_not_exist) |& cat'], 1,
++AT_CHECK([tcsh -f -c '(echo $this_does_not_exist) |& cat'], 0,
+ [this_does_not_exist: Undefined variable.
+ ])
+ 
+-- 
+2.4.3
+
+
+From 4135b088d237c5f1f48a026ab66ab45fc7c188fd Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Tue, 29 Nov 2011 18:38:54 +0000
+Subject: [PATCH 2/7] PR/155: Angelo Bonet: Default $anyerror to set for
+ backwards compatibility.
+
+---
+ sh.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sh.c b/sh.c
+index 50e7ae2..f1139bf 100644
+--- a/sh.c
++++ b/sh.c
+@@ -274,6 +274,8 @@ main(int argc, char **argv)
+     PRCHROOT = '#';
+     word_chars = STR_WORD_CHARS;
+     bslash_quote = 0;		/* PWP: do tcsh-style backslash quoting? */
++    anyerror = 1;		/* for compatibility */
++    setcopy(STRanyerror, STRNULL, VAR_READWRITE);
+ 
+     /* Default history size to 100 */
+     setcopy(STRhistory, str2short("100"), VAR_READWRITE);
+-- 
+2.4.3
+
+
+From a02154b9e35ada71632c9cbaba68791ad1c477bc Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Tue, 27 Dec 2011 21:50:52 +0000
+Subject: [PATCH 3/7] revert changes to the tests for the different return
+ codes
+
+---
+ tests/lexical.at   | 4 ++--
+ tests/subst.at     | 2 +-
+ tests/syntax.at    | 2 +-
+ tests/variables.at | 2 +-
+ 4 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/tests/lexical.at b/tests/lexical.at
+index 02534fe..70a2575 100644
+--- a/tests/lexical.at
++++ b/tests/lexical.at
+@@ -57,7 +57,7 @@ echo "&|;<>()&||<<>>space tab	end"
+ set verbose
+ echo `&|;<>()&||<<>>space tab	end`
+ ]])
+-AT_CHECK([tcsh -f nosplit.csh], 0,
++AT_CHECK([tcsh -f nosplit.csh], 1,
+ [&|;<>()&||<<>>space tab	end
+ &|;<>()&||<<>>space tab	end
+ &|;<>()&||<<>>space tab	end
+@@ -132,7 +132,7 @@ AT_CHECK([tcsh -f -c "echo !OK"], 1, ,
+ AT_CHECK([tcsh -f -c 'echo "$OK"'], 1, , [OK: Undefined variable.
+ ])
+ 
+-AT_CHECK([tcsh -f -c 'echo "`OK`"'], 0, [
++AT_CHECK([tcsh -f -c 'echo "`OK`"'], 1, [
+ ],
+ [OK: Command not found.
+ ])
+diff --git a/tests/subst.at b/tests/subst.at
+index a59171b..71feb97 100644
+--- a/tests/subst.at
++++ b/tests/subst.at
+@@ -14,7 +14,7 @@ set csubstnonl
+ echo `echo 1; \\
+   echo 2`
+ ]])
+-AT_CHECK([tcsh -f backq.csh], 0,
++AT_CHECK([tcsh -f backq.csh], 1,
+ [4
+ 2
+ 1 2
+diff --git a/tests/syntax.at b/tests/syntax.at
+index 4908ba3..2a2abd0 100644
+--- a/tests/syntax.at
++++ b/tests/syntax.at
+@@ -156,7 +156,7 @@ AT_CHECK([cat output], ,
+ [OK
+ ])
+ 
+-AT_CHECK([tcsh -f -c '(echo $this_does_not_exist) |& cat'], 0,
++AT_CHECK([tcsh -f -c '(echo $this_does_not_exist) |& cat'], 1,
+ [this_does_not_exist: Undefined variable.
+ ])
+ 
+diff --git a/tests/variables.at b/tests/variables.at
+index 11679bf..6912a81 100644
+--- a/tests/variables.at
++++ b/tests/variables.at
+@@ -547,7 +547,7 @@ history
+ ]])
+ AT_CHECK([tcsh -f -i -q < history.csh | sed "s,$PWD,CWD,"], ,
+ [> 1 100
+-CWD,~,     6,     6,     6,%,-1,value,>,history
++CWD,~,     6,     6,     6,%,0,value,>,history
+ > exit
+ ])
+ 
+-- 
+2.4.3
+
+
+From 936e15392c3165c3f832ac704549a44af23198e1 Mon Sep 17 00:00:00 2001
+From: kim <kim>
+Date: Wed, 30 Jul 2014 12:58:36 +0000
+Subject: [PATCH 4/7] Document the anyerror variable.
+
+---
+ tcsh.man | 28 +++++++++++++++++++---------
+ 1 file changed, 19 insertions(+), 9 deletions(-)
+
+diff --git a/tcsh.man b/tcsh.man
+index e44e2c2..e012a17 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -3569,6 +3569,11 @@ the local username for kerberos authentication.
+ .B ampm \fR(+)
+ If set, all times are shown in 12-hour AM/PM format.
+ .TP 8
++.B anyerror \fR(+)
++This variable selects what is propagated to the value of the
++\fBstatus\fR variable. For more information see the description of the
++\fBstatus\fR variable below.
++.TP 8
+ .B argv
+ The arguments to the shell.  Positional parameters are taken from \fBargv\fR,
+ i.e., `$1' is replaced by `$argv[1]', etc.
+@@ -4251,15 +4256,20 @@ Reset to 1 in login shells.
+ See also \fBloginsh\fR.
+ .TP 8
+ .B status
+-The status returned by the last command, unless the variable
+-.B anyerror
+-is set, and any error in a pipeline or a backquote expansion will be
+-propagated (this was the default
+-.B csh
+-behavior). If it terminated
+-abnormally, then 0200 is added to the status.  Builtin commands
+-which fail return exit status `1', all other builtin commands
+-return status `0'.
++The exit status returned by the last command, and any error in a
++pipeline or a backquote expansion will be propagated to \fBstatus\fR
++(this is the default \fBcsh\fR behavior, and the current \fBtcsh\fR
++default).
++.RS +8
++.PP
++If the \fBanyerror\fR variable is unset, the exit status of a pipeline
++is set based on the last command in the pipeline, and the exit status of
++a backquote expansion is \fInot\fR propagated to \fBstatus\fR.
++.PP
++If a command terminated abnormally, then 0200 is added to the status.
++Builtin commands which fail return exit status `1', all other builtin
++commands return status `0'.
++.RE
+ .TP 8
+ .B symlinks \fR(+)
+ Can be set to several different values to control symbolic link (`symlink')
+-- 
+2.4.3
+
+
+From 276d9662cd917ccc345b86807c977a25347ecaac Mon Sep 17 00:00:00 2001
+From: kim <kim>
+Date: Wed, 30 Jul 2014 13:34:21 +0000
+Subject: [PATCH 5/7] Be more accurate.
+
+---
+ tcsh.man | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/tcsh.man b/tcsh.man
+index e012a17..bdf117f 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -4256,15 +4256,14 @@ Reset to 1 in login shells.
+ See also \fBloginsh\fR.
+ .TP 8
+ .B status
+-The exit status returned by the last command, and any error in a
+-pipeline or a backquote expansion will be propagated to \fBstatus\fR
+-(this is the default \fBcsh\fR behavior, and the current \fBtcsh\fR
+-default).
++The exit status from the last command or backquote expansion, or any
++command in a pipeline is propagated to \fBstatus\fR.  (This is also the
++default \fBcsh\fR behavior.)
+ .RS +8
+ .PP
+ If the \fBanyerror\fR variable is unset, the exit status of a pipeline
+-is set based on the last command in the pipeline, and the exit status of
+-a backquote expansion is \fInot\fR propagated to \fBstatus\fR.
++is determined only from the last command in the pipeline, and the exit
++status of a backquote expansion is \fInot\fR propagated to \fBstatus\fR.
+ .PP
+ If a command terminated abnormally, then 0200 is added to the status.
+ Builtin commands which fail return exit status `1', all other builtin
+-- 
+2.4.3
+
+
+From 819b75c11a97bcdd6b7a07296253c7fe05d9002b Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Wed, 27 Aug 2014 10:14:16 +0000
+Subject: [PATCH 6/7] clarify that posix does not match what anyerror does.
+
+---
+ tcsh.man | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/tcsh.man b/tcsh.man
+index bdf117f..543acde 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -4259,6 +4259,9 @@ See also \fBloginsh\fR.
+ The exit status from the last command or backquote expansion, or any
+ command in a pipeline is propagated to \fBstatus\fR.  (This is also the
+ default \fBcsh\fR behavior.)
++This default does not match what POSIX mandates (to return the
++status of the last command only). To match the POSIX behavior, you need
++to unset \fBanyerror\fR.
+ .RS +8
+ .PP
+ If the \fBanyerror\fR variable is unset, the exit status of a pipeline
+-- 
+2.4.3
+
+
+From 48fb38c80a6ec1369810b6c93cfa1b0c5be16cf1 Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Wed, 27 Aug 2014 10:58:02 +0000
+Subject: [PATCH 7/7] add test for anyerror (Pavel Raiskup)
+
+---
+ tests/variables.at | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/tests/variables.at b/tests/variables.at
+index 6912a81..d39e5d6 100644
+--- a/tests/variables.at
++++ b/tests/variables.at
+@@ -39,6 +39,28 @@ VAR_UNSET([afsuser])
+ VAR_UNSET([ampm])
+ 
+ 
++AT_SETUP([$ anyerror])
++
++AT_DATA([exit_status.csh],
++[[echo $?anyerror $anyerror
++false | true ; echo $?
++unset anyerror ; echo $?anyerror
++false | true ; echo $?
++set anyerror
++false | true ; echo $?
++]])
++
++AT_CHECK([tcsh -f exit_status.csh],,
++[1
++1
++0
++0
++1
++])
++
++AT_CLEANUP
++
++
+ AT_SETUP([$ argv])
+ 
+ AT_CHECK([tcsh -f -c 'echo $argv; echo $2' foo bar baz], ,
+-- 
+2.4.3
+

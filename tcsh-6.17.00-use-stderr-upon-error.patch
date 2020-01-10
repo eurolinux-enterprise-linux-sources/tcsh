@@ -1,0 +1,106 @@
+From acfe6b25f372f1e2382424df2c74490334544f78 Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Sun, 22 Feb 2015 21:40:14 +0000
+Subject: [PATCH 1/2] PR/291: print job status to stderr
+
+---
+ sh.proc.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sh.proc.c b/sh.proc.c
+index 0a9ff7d..40bdd93 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -986,6 +986,7 @@ pprint(struct process *pp, int flag)
+     tp = pp;
+     status = reason = -1;
+     jobflags = 0;
++    haderr = 1;	/* Print statuc to stderr */
+     do {
+ #ifdef BACKPIPE
+ 	/*
+@@ -1194,6 +1195,7 @@ prcomd:
+ 	    xprintf("       ");
+ 	ptprint(tp);
+     }
++    haderr = 0;
+     return (jobflags);
+ }
+ 
+-- 
+2.4.3
+
+
+From 1ee8a9d2888ee78fa1c19cdc31926974107588fb Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Sun, 3 May 2015 13:53:32 +0000
+Subject: [PATCH 2/2] fix tests to pass for job output going to stderr
+
+---
+ tests/commands.at  | 12 +++++++-----
+ tests/syntax.at    |  5 +++--
+ tests/variables.at |  2 +-
+ 3 files changed, 11 insertions(+), 8 deletions(-)
+
+diff --git a/tests/commands.at b/tests/commands.at
+index 9ccdce1..a2ae9d8 100644
+--- a/tests/commands.at
++++ b/tests/commands.at
+@@ -702,9 +702,10 @@ echo fail
+ # onintr - is necessary to keep setintr == 0; should dohup () be checking
+ # something else?
+ AT_CHECK([tcsh -f -c 'onintr -; nohup tcsh -f hup.csh' < /dev/null], ignore,
+-[OK
+-Hangup
+-])
++[[OK
++]],
++[[Hangup]]
++)
+ 
+ # The prefix form requires job control and is not tested
+ 
+@@ -782,8 +783,9 @@ AT_DATA([kill.csh],
+ kill -USR1 $$
+ ]])
+ AT_CHECK([tcsh -f -c 'tcsh -f -i -q < kill.csh'], ignore,
+-[> User signal 1
+-])
++[[> ]],
++[[User signal 1]]
++)
+ 
+ # kill %job, kill -l untested untested
+ 
+diff --git a/tests/syntax.at b/tests/syntax.at
+index 2a2abd0..23fc8d5 100644
+--- a/tests/syntax.at
++++ b/tests/syntax.at
+@@ -28,8 +28,9 @@ AT_CHECK([[tcsh -f -c '(sleep 1; echo async) & echo sync; wait' \
+ [[[1] @&t@
+ sync
+ async
+-[1]    Done                          ( sleep 1; echo async )
+-]])
++]],
++[[[1]    Done                          ( sleep 1; echo async )]]
++)
+ 
+ AT_CLEANUP
+ 
+diff --git a/tests/variables.at b/tests/variables.at
+index 6ec4c4b..7acf88e 100644
+--- a/tests/variables.at
++++ b/tests/variables.at
+@@ -909,7 +909,7 @@ if ( $status > 128 ) echo OK
+ true
+ echo $status
+ ]])
+-AT_CHECK([tcsh -f status.csh | sed 's/Abort (core dumped)/Abort/'], ,
++AT_CHECK([tcsh -f status.csh 2>&1 | sed 's/Abort (core dumped)/Abort/'], ,
+ [0
+ Abort
+ OK
+-- 
+2.4.3
+

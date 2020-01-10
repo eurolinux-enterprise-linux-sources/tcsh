@@ -1,0 +1,1036 @@
+From 6d7585fb40928ca33bc97b66ebdd56e24557d8b0 Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Tue, 26 Jan 2010 16:10:08 +0000
+Subject: [PATCH 1/2] make internal calculations use 64 bits.
+
+---
+ sh.c       |   2 +-
+ sh.decls.h |  10 +++---
+ sh.dol.c   |  19 ++++++------
+ sh.exp.c   | 101 +++++++++++++++++++++++++++++++------------------------------
+ sh.lex.c   |   2 +-
+ sh.proc.c  |   2 +-
+ sh.set.c   |  20 ++++++------
+ tc.func.c  |   2 +-
+ 8 files changed, 80 insertions(+), 78 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index 24e3484..1a75b8d 100644
+--- a/sh.c
++++ b/sh.c
+@@ -703,7 +703,7 @@ main(int argc, char **argv)
+ 	parseLS_COLORS(str2short(tcp));
+ #endif /* COLOR_LS_F */
+ 
+-    doldol = putn((int) getpid());	/* For $$ */
++    doldol = putn((long long)getpid());	/* For $$ */
+ #ifdef WINNT_NATIVE
+     {
+ 	char *tmp;
+diff --git a/sh.decls.h b/sh.decls.h
+index b7ec371..c377604 100644
+--- a/sh.decls.h
++++ b/sh.decls.h
+@@ -124,9 +124,9 @@ extern	int		  find_cmd	(Char *, int);
+ /*
+  * sh.exp.c
+  */
+-extern  Char     *filetest       (Char *, Char ***, int);
+-extern	int	 	  expr		(Char ***);
+-extern	int		  exp0		(Char ***, int);
++extern  Char		 *filetest      (Char *, Char ***, int);
++extern	long long 	  expr		(Char ***);
++extern	long long	  exp0		(Char ***, int);
+ 
+ /*
+  * sh.file.c
+@@ -371,8 +371,8 @@ extern	void		  mypipe	(int *);
+ extern	struct varent 	 *adrof1	(const Char *, struct varent *);
+ extern	void		  doset		(Char **, struct command *);
+ extern	void		  dolet		(Char **, struct command *);
+-extern	Char		 *putn		(int);
+-extern	int		  getn		(Char *);
++extern	Char		 *putn		(long long);
++extern	long long	  getn		(const Char *);
+ extern	Char		 *value1	(Char *, struct varent *);
+ extern	void		  setcopy	(const Char *, const Char *, int);
+ extern	void		  setv		(const Char *, Char *, int);
+diff --git a/sh.dol.c b/sh.dol.c
+index b9fe82a..bd11c3f 100644
+--- a/sh.dol.c
++++ b/sh.dol.c
+@@ -402,7 +402,7 @@ Dgetdol(void)
+ 	    stderror(ERR_SYNTAX);
+ 	if (backpid != 0) {
+ 	    xfree(dolbang);
+-	    setDolp(dolbang = putn(backpid));
++	    setDolp(dolbang = putn((long long)backpid));
+ 	}
+ 	cleanup_until(name);
+ 	goto eatbrac;
+@@ -528,7 +528,7 @@ Dgetdol(void)
+ 		    stderror(ERR_DOLZERO);
+ 		if (length) {
+ 		    length = Strlen(ffile);
+-		    addla(putn(length));
++		    addla(putn((long long)length));
+ 		}
+ 		else {
+ 		    fixDolMod();
+@@ -588,7 +588,7 @@ Dgetdol(void)
+ 	    cleanup_until(name);
+ 	    fixDolMod();
+ 	    if (length) {
+-		    addla(putn(Strlen(np)));
++		    addla(putn((long long)Strlen(np)));
+ 	    } else {
+ 		    xfree(env_val);
+ 		    env_val = Strsave(np);
+@@ -625,7 +625,7 @@ Dgetdol(void)
+ 
+ 	    for (i = 0; Isdigit(*np); i = i * 10 + *np++ - '0')
+ 		continue;
+-	    if (i < 0 || i > upb && !any("-*", *np)) {
++	    if (i < 0 || (i > upb && !any("-*", *np))) {
+ 		cleanup_until(name);
+ 		dolerror(vp->v_name);
+ 		return;
+@@ -687,7 +687,7 @@ Dgetdol(void)
+ 		stderror(ERR_MISSING, '}');
+ 	    unDredc(c);
+ 	}
+-	addla(putn(upb - lwb + 1));
++	addla(putn((long long)(upb - lwb + 1)));
+     }
+     else if (length) {
+ 	int i;
+@@ -698,7 +698,7 @@ Dgetdol(void)
+ 	/* We don't want that, since we can always compute it by adding $#xxx */
+ 	length += i - 1;	/* Add the number of spaces in */
+ #endif
+-	addla(putn(length));
++	addla(putn((long long)length));
+     }
+     else {
+ eatmod:
+@@ -830,7 +830,7 @@ setDolp(Char *cp)
+ 		    cp = np;
+ 		    cp[--len] = '\0';
+ 		    didmod = 1;
+-		    if (diff >= len)
++		    if (diff >= (ssize_t)len)
+ 			break;
+ 		} else {
+ 		    /* should this do a seterror? */
+@@ -963,8 +963,9 @@ again:
+ 	    if (unlink(tmp) == -1) {
+ 		(void) gettimeofday(&tv, NULL);
+ 		xfree(shtemp);
+-		mbp = putn((((int)tv.tv_sec) ^ 
+-		    ((int)tv.tv_usec) ^ ((int)getpid())) & 0x00ffffff);
++		mbp = putn((((long long)tv.tv_sec) ^ 
++		    ((long long)tv.tv_usec) ^
++		    ((long long)getpid())) & 0x00ffffff);
+ 		shtemp = Strspl(STRtmpsh, mbp);
+ 		xfree(mbp);
+ 	    }
+diff --git a/sh.exp.c b/sh.exp.c
+index 70e25d4..0060c14 100644
+--- a/sh.exp.c
++++ b/sh.exp.c
+@@ -57,24 +57,24 @@ RCSID("$tcsh: sh.exp.c,v 3.53 2007/10/01 19:09:28 christos Exp $")
+ #define EQMATCH 7
+ #define NOTEQMATCH 8
+ 
+-static	int	 sh_access	(const Char *, int);
+-static	int	 exp1		(Char ***, int);
+-static	int	 exp2x		(Char ***, int);
+-static	int	 exp2a		(Char ***, int);
+-static	int	 exp2b		(Char ***, int);
+-static	int	 exp2c		(Char ***, int);
+-static	Char 	*exp3		(Char ***, int);
+-static	Char 	*exp3a		(Char ***, int);
+-static	Char 	*exp4		(Char ***, int);
+-static	Char 	*exp5		(Char ***, int);
+-static	Char 	*exp6		(Char ***, int);
+-static	void	 evalav		(Char **);
+-static	int	 isa		(Char *, int);
+-static	int	 egetn		(Char *);
++static	int	   sh_access	(const Char *, int);
++static	long long  exp1		(Char ***, int);
++static	long long  exp2x	(Char ***, int);
++static	long long  exp2a	(Char ***, int);
++static	long long  exp2b	(Char ***, int);
++static	long long  exp2c	(Char ***, int);
++static	Char 	  *exp3		(Char ***, int);
++static	Char 	  *exp3a	(Char ***, int);
++static	Char 	  *exp4		(Char ***, int);
++static	Char 	  *exp5		(Char ***, int);
++static	Char 	  *exp6		(Char ***, int);
++static	void	   evalav	(Char **);
++static	int	   isa		(Char *, int);
++static	long long  egetn	(const Char *);
+ 
+ #ifdef EDEBUG
+-static	void	 etracc		(const char *, const Char *, Char ***);
+-static	void	 etraci		(const char *, int, Char ***);
++static	void	   etracc	(const char *, const Char *, Char ***);
++static	void	   etraci	(const char *, long long, Char ***);
+ #else /* !EDEBUG */
+ #define etracc(A, B, C) ((void)0)
+ #define etraci(A, B, C) ((void)0)
+@@ -183,16 +183,16 @@ sh_access(const Char *fname, int mode)
+ #endif /* !POSIX */
+ }
+ 
+-int
++long long
+ expr(Char ***vp)
+ {
+     return (exp0(vp, 0));
+ }
+ 
+-int
++long long
+ exp0(Char ***vp, int ignore)
+ {
+-    int p1 = exp1(vp, ignore);
++    long long p1 = exp1(vp, ignore);
+ 
+     etraci("exp0 p1", p1, vp);
+     while (**vp && eq(**vp, STRor2)) {
+@@ -212,14 +212,14 @@ exp0(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static int
++static long long
+ exp1(Char ***vp, int ignore)
+ {
+-    int p1 = exp2x(vp, ignore);
++    long long p1 = exp2x(vp, ignore);
+ 
+     etraci("exp1 p1", p1, vp);
+     while (**vp && eq(**vp, STRand2)) {
+-	int p2;
++	long long p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -236,14 +236,14 @@ exp1(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static int
++static long long
+ exp2x(Char ***vp, int ignore)
+ {
+-    int p1 = exp2a(vp, ignore);
++    long long p1 = exp2a(vp, ignore);
+ 
+     etraci("exp2x p1", p1, vp);
+     while (**vp && eq(**vp, STRor)) {
+-	int p2;
++	long long p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -259,14 +259,14 @@ exp2x(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static int
++static long long
+ exp2a(Char ***vp, int ignore)
+ {
+-    int p1 = exp2b(vp, ignore);
++    long long p1 = exp2b(vp, ignore);
+ 
+     etraci("exp2a p1", p1, vp);
+     while (**vp && eq(**vp, STRcaret)) {
+-	int p2;
++	long long p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -282,14 +282,14 @@ exp2a(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static int
++static long long
+ exp2b(Char ***vp, int ignore)
+ {
+-    int p1 = exp2c(vp, ignore);
++    long long p1 = exp2c(vp, ignore);
+ 
+     etraci("exp2b p1", p1, vp);
+     while (**vp && eq(**vp, STRand)) {
+-	int p2;
++	long long p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -305,12 +305,12 @@ exp2b(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static int
++static long long
+ exp2c(Char ***vp, int ignore)
+ {
+     Char *p1 = exp3(vp, ignore);
+     Char *p2;
+-    int i;
++    long long i;
+ 
+     cleanup_push(p1, xfree);
+     etracc("exp2c p1", p1, vp);
+@@ -352,7 +352,7 @@ static Char *
+ exp3(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    int i;
++    long long i;
+ 
+     p1 = exp3a(vp, ignore);
+     etracc("exp3 p1", p1, vp);
+@@ -399,7 +399,7 @@ exp3a(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+     const Char *op;
+-    int i;
++    long long i;
+ 
+     p1 = exp4(vp, ignore);
+     etracc("exp3a p1", p1, vp);
+@@ -427,7 +427,7 @@ static Char *
+ exp4(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    int i = 0;
++    long long i = 0;
+ 
+     p1 = exp5(vp, ignore);
+     etracc("exp4 p1", p1, vp);
+@@ -464,7 +464,7 @@ static Char *
+ exp5(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    int i = 0;
++    long long i = 0;
+ 
+     p1 = exp6(vp, ignore);
+     etracc("exp5 p1", p1, vp);
+@@ -519,7 +519,8 @@ exp5(Char ***vp, int ignore)
+ static Char *
+ exp6(Char ***vp, int ignore)
+ {
+-    int     ccode, i = 0;
++    long long ccode;
++    long long i = 0;
+     Char *cp;
+ 
+     if (**vp == 0)
+@@ -626,7 +627,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+     char *filnam;
+ #endif /* S_IFLNK */
+ 
+-    int i = 0;
++    long long i = 0;
+     unsigned pmask = 0xffff;
+     int altout = 0;
+     Char *ft = cp, *dp, *ep, *strdev, *strino, *strF, *str, valtest = '\0',
+@@ -851,11 +852,11 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		 */
+ 
+ 	    case 'D':
+-		i = (int) st->st_dev;
++		i = (long long) st->st_dev;
+ 		break;
+ 
+ 	    case 'I':
+-		i = (int) st->st_ino;
++		i = (long long) st->st_ino;
+ 		break;
+ 		
+ 	    case 'F':
+@@ -889,7 +890,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		
+ 
+ 	    case 'N':
+-		i = (int) st->st_nlink;
++		i = (long long) st->st_nlink;
+ 		break;
+ 
+ 	    case 'P':
+@@ -907,7 +908,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(str2short(pw->pw_name)));
+ 		}
+-		i = (int) st->st_uid;
++		i = (long long) st->st_uid;
+ 		break;
+ 
+ 	    case 'G':
+@@ -915,11 +916,11 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(str2short(gr->gr_name)));
+ 		}
+-		i = (int) st->st_gid;
++		i = (long long) st->st_gid;
+ 		break;
+ 
+ 	    case 'Z':
+-		i = (int) st->st_size;
++		i = (long long) st->st_size;
+ 		break;
+ 
+ 	    case 'A': case 'M': case 'C':
+@@ -932,7 +933,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(strF));
+ 		}
+-		i = (int) footime;
++		i = (long long) footime;
+ 		break;
+ 
+ 	    }
+@@ -1023,8 +1024,8 @@ isa(Char *cp, int what)
+     return (0);
+ }
+ 
+-static int
+-egetn(Char *cp)
++static long long
++egetn(const Char *cp)
+ {
+     if (*cp && *cp != '-' && !Isdigit(*cp))
+ 	stderror(ERR_NAME | ERR_EXPRESSION);
+@@ -1035,9 +1036,9 @@ egetn(Char *cp)
+ 
+ #ifdef EDEBUG
+ static void
+-etraci(const char *str, int i, Char ***vp)
++etraci(const char *str, long long i, Char ***vp)
+ {
+-    xprintf("%s=%d\t", str, i);
++    xprintf("%s=%lld\t", str, i);
+     blkpr(*vp);
+     xputchar('\n');
+ }
+diff --git a/sh.lex.c b/sh.lex.c
+index b4b8481..c7ec1ba 100644
+--- a/sh.lex.c
++++ b/sh.lex.c
+@@ -1266,7 +1266,7 @@ gethent(Char sc)
+ 	    lastev = hp->Hnum;
+ 	    return (&hp->Hlex);
+ 	}
+-    np = putn(event);
++    np = putn((long long)event);
+     seterror(ERR_NOEVENT, short2str(np));
+     xfree(np);
+     return (0);
+diff --git a/sh.proc.c b/sh.proc.c
+index 40bdd93..2b167af 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -568,7 +568,7 @@ pjwait(struct process *pp)
+     if ((reason != 0) && (adrof(STRprintexitvalue)) && 
+ 	(pp->p_flags & PBACKQ) == 0)
+ 	xprintf(CGETS(17, 2, "Exit %d\n"), reason);
+-    reason_str = putn(reason);
++    reason_str = putn((long long)reason);
+     cleanup_push(reason_str, xfree);
+     setv(STRstatus, reason_str, VAR_READWRITE);
+     cleanup_ignore(reason_str);
+diff --git a/sh.set.c b/sh.set.c
+index 7555962..7af5639 100644
+--- a/sh.set.c
++++ b/sh.set.c
+@@ -50,7 +50,7 @@ static	void		 asx		(Char *, int, Char *);
+ static	struct varent 	*getvx		(Char *, int);
+ static	Char		*xset		(Char *, Char ***);
+ static	Char		*operate	(int, Char *, Char *);
+-static	void	 	 putn1		(unsigned);
++static	void	 	 putn1		(unsigned long long);
+ static	struct varent	*madrof		(Char *, struct varent *);
+ static	void		 unsetv1	(struct varent *);
+ static	void		 exportpath	(Char **);
+@@ -190,7 +190,7 @@ update_vars(Char *vp)
+ 	tw_cmd_free();
+     }
+     else if (eq(vp, STRkillring)) {
+-	SetKillRing(getn(varval(vp)));
++	SetKillRing((int)getn(varval(vp)));
+     }
+ #ifndef HAVENOUTMP
+     else if (eq(vp, STRwatch)) {
+@@ -484,7 +484,7 @@ operate(int op, Char *vp, Char *p)
+     Char   *vec[5];
+     Char **v = vec;
+     Char  **vecp = v;
+-    int i;
++    long long i;
+ 
+     if (op != '=') {
+ 	if (*vp)
+@@ -505,10 +505,10 @@ operate(int op, Char *vp, Char *p)
+ 
+ static Char *putp;
+ 
+-Char   *
+-putn(int n)
++Char *
++putn(long long n)
+ {
+-    Char nbuf[(CHAR_BIT * sizeof (n) + 2) / 3 + 2]; /* Enough even for octal */
++    Char nbuf[1024]; /* Enough even for octal */
+ 
+     putp = nbuf;
+     if (n < 0) {
+@@ -521,17 +521,17 @@ putn(int n)
+ }
+ 
+ static void
+-putn1(unsigned n)
++putn1(unsigned long long n)
+ {
+     if (n > 9)
+ 	putn1(n / 10);
+     *putp++ = n % 10 + '0';
+ }
+ 
+-int
+-getn(Char *cp)
++long long
++getn(const Char *cp)
+ {
+-    int n;
++    long long n;
+     int     sign;
+     int base;
+ 
+diff --git a/tc.func.c b/tc.func.c
+index 2fbdbb4..27cd982 100644
+--- a/tc.func.c
++++ b/tc.func.c
+@@ -1035,7 +1035,7 @@ aliasrun(int cnt, Char *s1, Char *s2)
+     cleanup_until(&w);
+     pendjob();
+     /* Restore status */
+-    setv(STRstatus, putn(status), VAR_READWRITE);
++    setv(STRstatus, putn((long long)status), VAR_READWRITE);
+ }
+ 
+ void
+-- 
+2.4.3
+
+
+From 69d6bce84c413c25e1c881036585f270e8a97962 Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Tue, 26 Jan 2010 20:03:17 +0000
+Subject: [PATCH 2/2] deal with systems that don't have long long
+
+---
+ sh.c       |  2 +-
+ sh.decls.h |  8 +++---
+ sh.dol.c   | 16 ++++++------
+ sh.exp.c   | 84 ++++++++++++++++++++++++++++++++------------------------------
+ sh.h       |  5 ++++
+ sh.lex.c   |  2 +-
+ sh.proc.c  |  2 +-
+ sh.set.c   | 12 ++++-----
+ tc.func.c  |  2 +-
+ 9 files changed, 71 insertions(+), 62 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index 1a75b8d..1227242 100644
+--- a/sh.c
++++ b/sh.c
+@@ -703,7 +703,7 @@ main(int argc, char **argv)
+ 	parseLS_COLORS(str2short(tcp));
+ #endif /* COLOR_LS_F */
+ 
+-    doldol = putn((long long)getpid());	/* For $$ */
++    doldol = putn((tcsh_number_t)getpid());	/* For $$ */
+ #ifdef WINNT_NATIVE
+     {
+ 	char *tmp;
+diff --git a/sh.decls.h b/sh.decls.h
+index c377604..c69d8e5 100644
+--- a/sh.decls.h
++++ b/sh.decls.h
+@@ -125,8 +125,8 @@ extern	int		  find_cmd	(Char *, int);
+  * sh.exp.c
+  */
+ extern  Char		 *filetest      (Char *, Char ***, int);
+-extern	long long 	  expr		(Char ***);
+-extern	long long	  exp0		(Char ***, int);
++extern	tcsh_number_t 	  expr		(Char ***);
++extern	tcsh_number_t	  exp0		(Char ***, int);
+ 
+ /*
+  * sh.file.c
+@@ -371,8 +371,8 @@ extern	void		  mypipe	(int *);
+ extern	struct varent 	 *adrof1	(const Char *, struct varent *);
+ extern	void		  doset		(Char **, struct command *);
+ extern	void		  dolet		(Char **, struct command *);
+-extern	Char		 *putn		(long long);
+-extern	long long	  getn		(const Char *);
++extern	Char		 *putn		(tcsh_number_t);
++extern	tcsh_number_t	  getn		(const Char *);
+ extern	Char		 *value1	(Char *, struct varent *);
+ extern	void		  setcopy	(const Char *, const Char *, int);
+ extern	void		  setv		(const Char *, Char *, int);
+diff --git a/sh.dol.c b/sh.dol.c
+index bd11c3f..d125997 100644
+--- a/sh.dol.c
++++ b/sh.dol.c
+@@ -402,7 +402,7 @@ Dgetdol(void)
+ 	    stderror(ERR_SYNTAX);
+ 	if (backpid != 0) {
+ 	    xfree(dolbang);
+-	    setDolp(dolbang = putn((long long)backpid));
++	    setDolp(dolbang = putn((tcsh_number_t)backpid));
+ 	}
+ 	cleanup_until(name);
+ 	goto eatbrac;
+@@ -528,7 +528,7 @@ Dgetdol(void)
+ 		    stderror(ERR_DOLZERO);
+ 		if (length) {
+ 		    length = Strlen(ffile);
+-		    addla(putn((long long)length));
++		    addla(putn((tcsh_number_t)length));
+ 		}
+ 		else {
+ 		    fixDolMod();
+@@ -588,7 +588,7 @@ Dgetdol(void)
+ 	    cleanup_until(name);
+ 	    fixDolMod();
+ 	    if (length) {
+-		    addla(putn((long long)Strlen(np)));
++		    addla(putn((tcsh_number_t)Strlen(np)));
+ 	    } else {
+ 		    xfree(env_val);
+ 		    env_val = Strsave(np);
+@@ -687,7 +687,7 @@ Dgetdol(void)
+ 		stderror(ERR_MISSING, '}');
+ 	    unDredc(c);
+ 	}
+-	addla(putn((long long)(upb - lwb + 1)));
++	addla(putn((tcsh_number_t)(upb - lwb + 1)));
+     }
+     else if (length) {
+ 	int i;
+@@ -698,7 +698,7 @@ Dgetdol(void)
+ 	/* We don't want that, since we can always compute it by adding $#xxx */
+ 	length += i - 1;	/* Add the number of spaces in */
+ #endif
+-	addla(putn((long long)length));
++	addla(putn((tcsh_number_t)length));
+     }
+     else {
+ eatmod:
+@@ -963,9 +963,9 @@ again:
+ 	    if (unlink(tmp) == -1) {
+ 		(void) gettimeofday(&tv, NULL);
+ 		xfree(shtemp);
+-		mbp = putn((((long long)tv.tv_sec) ^ 
+-		    ((long long)tv.tv_usec) ^
+-		    ((long long)getpid())) & 0x00ffffff);
++		mbp = putn((((tcsh_number_t)tv.tv_sec) ^ 
++		    ((tcsh_number_t)tv.tv_usec) ^
++		    ((tcsh_number_t)getpid())) & 0x00ffffff);
+ 		shtemp = Strspl(STRtmpsh, mbp);
+ 		xfree(mbp);
+ 	    }
+diff --git a/sh.exp.c b/sh.exp.c
+index 0060c14..07039c8 100644
+--- a/sh.exp.c
++++ b/sh.exp.c
+@@ -58,11 +58,11 @@ RCSID("$tcsh: sh.exp.c,v 3.53 2007/10/01 19:09:28 christos Exp $")
+ #define NOTEQMATCH 8
+ 
+ static	int	   sh_access	(const Char *, int);
+-static	long long  exp1		(Char ***, int);
+-static	long long  exp2x	(Char ***, int);
+-static	long long  exp2a	(Char ***, int);
+-static	long long  exp2b	(Char ***, int);
+-static	long long  exp2c	(Char ***, int);
++static	tcsh_number_t  exp1		(Char ***, int);
++static	tcsh_number_t  exp2x	(Char ***, int);
++static	tcsh_number_t  exp2a	(Char ***, int);
++static	tcsh_number_t  exp2b	(Char ***, int);
++static	tcsh_number_t  exp2c	(Char ***, int);
+ static	Char 	  *exp3		(Char ***, int);
+ static	Char 	  *exp3a	(Char ***, int);
+ static	Char 	  *exp4		(Char ***, int);
+@@ -70,11 +70,11 @@ static	Char 	  *exp5		(Char ***, int);
+ static	Char 	  *exp6		(Char ***, int);
+ static	void	   evalav	(Char **);
+ static	int	   isa		(Char *, int);
+-static	long long  egetn	(const Char *);
++static	tcsh_number_t  egetn	(const Char *);
+ 
+ #ifdef EDEBUG
+ static	void	   etracc	(const char *, const Char *, Char ***);
+-static	void	   etraci	(const char *, long long, Char ***);
++static	void	   etraci	(const char *, tcsh_number_t, Char ***);
+ #else /* !EDEBUG */
+ #define etracc(A, B, C) ((void)0)
+ #define etraci(A, B, C) ((void)0)
+@@ -183,16 +183,16 @@ sh_access(const Char *fname, int mode)
+ #endif /* !POSIX */
+ }
+ 
+-long long
++tcsh_number_t
+ expr(Char ***vp)
+ {
+     return (exp0(vp, 0));
+ }
+ 
+-long long
++tcsh_number_t
+ exp0(Char ***vp, int ignore)
+ {
+-    long long p1 = exp1(vp, ignore);
++    tcsh_number_t p1 = exp1(vp, ignore);
+ 
+     etraci("exp0 p1", p1, vp);
+     while (**vp && eq(**vp, STRor2)) {
+@@ -212,14 +212,14 @@ exp0(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static long long
++static tcsh_number_t
+ exp1(Char ***vp, int ignore)
+ {
+-    long long p1 = exp2x(vp, ignore);
++    tcsh_number_t p1 = exp2x(vp, ignore);
+ 
+     etraci("exp1 p1", p1, vp);
+     while (**vp && eq(**vp, STRand2)) {
+-	long long p2;
++	tcsh_number_t p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -236,14 +236,14 @@ exp1(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static long long
++static tcsh_number_t
+ exp2x(Char ***vp, int ignore)
+ {
+-    long long p1 = exp2a(vp, ignore);
++    tcsh_number_t p1 = exp2a(vp, ignore);
+ 
+     etraci("exp2x p1", p1, vp);
+     while (**vp && eq(**vp, STRor)) {
+-	long long p2;
++	tcsh_number_t p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -259,14 +259,14 @@ exp2x(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static long long
++static tcsh_number_t
+ exp2a(Char ***vp, int ignore)
+ {
+-    long long p1 = exp2b(vp, ignore);
++    tcsh_number_t p1 = exp2b(vp, ignore);
+ 
+     etraci("exp2a p1", p1, vp);
+     while (**vp && eq(**vp, STRcaret)) {
+-	long long p2;
++	tcsh_number_t p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -282,14 +282,14 @@ exp2a(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static long long
++static tcsh_number_t
+ exp2b(Char ***vp, int ignore)
+ {
+-    long long p1 = exp2c(vp, ignore);
++    tcsh_number_t p1 = exp2c(vp, ignore);
+ 
+     etraci("exp2b p1", p1, vp);
+     while (**vp && eq(**vp, STRand)) {
+-	long long p2;
++	tcsh_number_t p2;
+ 
+ 	(*vp)++;
+ 	p2 = compat_expr ?
+@@ -305,12 +305,12 @@ exp2b(Char ***vp, int ignore)
+     return (p1);
+ }
+ 
+-static long long
++static tcsh_number_t
+ exp2c(Char ***vp, int ignore)
+ {
+     Char *p1 = exp3(vp, ignore);
+     Char *p2;
+-    long long i;
++    tcsh_number_t i;
+ 
+     cleanup_push(p1, xfree);
+     etracc("exp2c p1", p1, vp);
+@@ -352,7 +352,7 @@ static Char *
+ exp3(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    long long i;
++    tcsh_number_t i;
+ 
+     p1 = exp3a(vp, ignore);
+     etracc("exp3 p1", p1, vp);
+@@ -399,7 +399,7 @@ exp3a(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+     const Char *op;
+-    long long i;
++    tcsh_number_t i;
+ 
+     p1 = exp4(vp, ignore);
+     etracc("exp3a p1", p1, vp);
+@@ -427,7 +427,7 @@ static Char *
+ exp4(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    long long i = 0;
++    tcsh_number_t i = 0;
+ 
+     p1 = exp5(vp, ignore);
+     etracc("exp4 p1", p1, vp);
+@@ -464,7 +464,7 @@ static Char *
+ exp5(Char ***vp, int ignore)
+ {
+     Char *p1, *p2;
+-    long long i = 0;
++    tcsh_number_t i = 0;
+ 
+     p1 = exp6(vp, ignore);
+     etracc("exp5 p1", p1, vp);
+@@ -519,8 +519,8 @@ exp5(Char ***vp, int ignore)
+ static Char *
+ exp6(Char ***vp, int ignore)
+ {
+-    long long ccode;
+-    long long i = 0;
++    tcsh_number_t ccode;
++    tcsh_number_t i = 0;
+     Char *cp;
+ 
+     if (**vp == 0)
+@@ -627,7 +627,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+     char *filnam;
+ #endif /* S_IFLNK */
+ 
+-    long long i = 0;
++    tcsh_number_t i = 0;
+     unsigned pmask = 0xffff;
+     int altout = 0;
+     Char *ft = cp, *dp, *ep, *strdev, *strino, *strF, *str, valtest = '\0',
+@@ -852,11 +852,11 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		 */
+ 
+ 	    case 'D':
+-		i = (long long) st->st_dev;
++		i = (tcsh_number_t) st->st_dev;
+ 		break;
+ 
+ 	    case 'I':
+-		i = (long long) st->st_ino;
++		i = (tcsh_number_t) st->st_ino;
+ 		break;
+ 		
+ 	    case 'F':
+@@ -890,7 +890,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		
+ 
+ 	    case 'N':
+-		i = (long long) st->st_nlink;
++		i = (tcsh_number_t) st->st_nlink;
+ 		break;
+ 
+ 	    case 'P':
+@@ -908,7 +908,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(str2short(pw->pw_name)));
+ 		}
+-		i = (long long) st->st_uid;
++		i = (tcsh_number_t) st->st_uid;
+ 		break;
+ 
+ 	    case 'G':
+@@ -916,11 +916,11 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(str2short(gr->gr_name)));
+ 		}
+-		i = (long long) st->st_gid;
++		i = (tcsh_number_t) st->st_gid;
+ 		break;
+ 
+ 	    case 'Z':
+-		i = (long long) st->st_size;
++		i = (tcsh_number_t) st->st_size;
+ 		break;
+ 
+ 	    case 'A': case 'M': case 'C':
+@@ -933,7 +933,7 @@ filetest(Char *cp, Char ***vp, int ignore)
+ 		    cleanup_until(ep);
+ 		    return(Strsave(strF));
+ 		}
+-		i = (long long) footime;
++		i = (tcsh_number_t) footime;
+ 		break;
+ 
+ 	    }
+@@ -1024,7 +1024,7 @@ isa(Char *cp, int what)
+     return (0);
+ }
+ 
+-static long long
++static tcsh_number_t
+ egetn(const Char *cp)
+ {
+     if (*cp && *cp != '-' && !Isdigit(*cp))
+@@ -1036,9 +1036,13 @@ egetn(const Char *cp)
+ 
+ #ifdef EDEBUG
+ static void
+-etraci(const char *str, long long i, Char ***vp)
++etraci(const char *str, tcsh_number_t i, Char ***vp)
+ {
++#ifdef HAVE_LONG_LONG
+     xprintf("%s=%lld\t", str, i);
++#else
++    xprintf("%s=%ld\t", str, i);
++#endif
+     blkpr(*vp);
+     xputchar('\n');
+ }
+diff --git a/sh.h b/sh.h
+index e612aa6..64566cc 100644
+--- a/sh.h
++++ b/sh.h
+@@ -240,6 +240,11 @@ static inline void ignore(intptr_t a)
+ # define lstat lstat64
+ #endif /* __HP_CXD_SPP && !__hpux */
+ 
++#ifdef HAVE_LONG_LONG
++typedef long long tcsh_number_t;
++#else
++typedef long tcsh_number_t;
++#endif
+ /*
+  * This macro compares the st_dev field of struct stat. On aix on ibmESA
+  * st_dev is a structure, so comparison does not work. 
+diff --git a/sh.lex.c b/sh.lex.c
+index c7ec1ba..355a868 100644
+--- a/sh.lex.c
++++ b/sh.lex.c
+@@ -1266,7 +1266,7 @@ gethent(Char sc)
+ 	    lastev = hp->Hnum;
+ 	    return (&hp->Hlex);
+ 	}
+-    np = putn((long long)event);
++    np = putn((tcsh_number_t)event);
+     seterror(ERR_NOEVENT, short2str(np));
+     xfree(np);
+     return (0);
+diff --git a/sh.proc.c b/sh.proc.c
+index 2b167af..d26df34 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -568,7 +568,7 @@ pjwait(struct process *pp)
+     if ((reason != 0) && (adrof(STRprintexitvalue)) && 
+ 	(pp->p_flags & PBACKQ) == 0)
+ 	xprintf(CGETS(17, 2, "Exit %d\n"), reason);
+-    reason_str = putn((long long)reason);
++    reason_str = putn((tcsh_number_t)reason);
+     cleanup_push(reason_str, xfree);
+     setv(STRstatus, reason_str, VAR_READWRITE);
+     cleanup_ignore(reason_str);
+diff --git a/sh.set.c b/sh.set.c
+index 7af5639..bf60061 100644
+--- a/sh.set.c
++++ b/sh.set.c
+@@ -50,7 +50,7 @@ static	void		 asx		(Char *, int, Char *);
+ static	struct varent 	*getvx		(Char *, int);
+ static	Char		*xset		(Char *, Char ***);
+ static	Char		*operate	(int, Char *, Char *);
+-static	void	 	 putn1		(unsigned long long);
++static	void	 	 putn1		(tcsh_number_t);
+ static	struct varent	*madrof		(Char *, struct varent *);
+ static	void		 unsetv1	(struct varent *);
+ static	void		 exportpath	(Char **);
+@@ -484,7 +484,7 @@ operate(int op, Char *vp, Char *p)
+     Char   *vec[5];
+     Char **v = vec;
+     Char  **vecp = v;
+-    long long i;
++    tcsh_number_t i;
+ 
+     if (op != '=') {
+ 	if (*vp)
+@@ -506,7 +506,7 @@ operate(int op, Char *vp, Char *p)
+ static Char *putp;
+ 
+ Char *
+-putn(long long n)
++putn(tcsh_number_t n)
+ {
+     Char nbuf[1024]; /* Enough even for octal */
+ 
+@@ -521,17 +521,17 @@ putn(long long n)
+ }
+ 
+ static void
+-putn1(unsigned long long n)
++putn1(tcsh_number_t n)
+ {
+     if (n > 9)
+ 	putn1(n / 10);
+     *putp++ = n % 10 + '0';
+ }
+ 
+-long long
++tcsh_number_t
+ getn(const Char *cp)
+ {
+-    long long n;
++    tcsh_number_t n;
+     int     sign;
+     int base;
+ 
+diff --git a/tc.func.c b/tc.func.c
+index 27cd982..472e80a 100644
+--- a/tc.func.c
++++ b/tc.func.c
+@@ -1035,7 +1035,7 @@ aliasrun(int cnt, Char *s1, Char *s2)
+     cleanup_until(&w);
+     pendjob();
+     /* Restore status */
+-    setv(STRstatus, putn((long long)status), VAR_READWRITE);
++    setv(STRstatus, putn((tcsh_number_t)status), VAR_READWRITE);
+ }
+ 
+ void
+-- 
+2.4.3
+

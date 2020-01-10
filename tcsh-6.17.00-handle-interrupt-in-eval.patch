@@ -1,0 +1,26 @@
+From 401437abd18d53c20da31d87d8ae8e1a9d6c8b2f Mon Sep 17 00:00:00 2001
+From: christos <christos>
+Date: Sun, 10 May 2015 13:28:54 +0000
+Subject: [PATCH 1/1] handle eval sleep 10^C not exiting, by setting doneinp if
+ we are interrupted inside an eval from paulo.cesar.pereira.de.andrade
+
+---
+ sh.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/sh.c b/sh.c
+index 64c2f80..f28d04a 100644
+--- a/sh.c
++++ b/sh.c
+@@ -1826,6 +1826,8 @@ pintr1(int wantnl)
+     {
+ 	(void) Cookedmode();
+ 	GettingInput = 0;
++	if (evalvec)
++	    doneinp = 1;
+     }
+     drainoline();
+ #ifdef HAVE_GETPWENT
+-- 
+2.4.3
+

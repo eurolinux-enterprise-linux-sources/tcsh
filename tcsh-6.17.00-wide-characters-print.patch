@@ -1,0 +1,145 @@
+From a3ef53c350354331a0f3cb02053ef9da5f91b2d0 Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Wed, 22 Dec 2010 17:26:04 +0000
+Subject: [PATCH 1/1] autoset kanji changes The patch attached provides a
+ solution.  I have reused the shell variable nokanji, to have a boolean around
+ to be able to skip the translation of the Shift-JIS characters Yen (which is
+ backslash aka 0x5c in ASCII) and an overline (which is in fact the place at
+ 0x7e of ASCII tilde).  Also I make it possible to use Meta if MB_CUR_MAX is 1
+ which is the case of using POSIX only.
+
+For not to stumble on two byte characters using byte 0x5c or
+byte 0x7e the last returned state of mbrtowc(3) is required.
+Therefore the mbstate_t variable has to be a static one.
+Maybe the memset to zero below could be skipped as this may
+provide a better support of multi byte characters becoming
+disconnected over buffer boundaries.
+---
+ ed.inputl.c |  2 +-
+ sh.c        |  9 ++++++++-
+ sh.decls.h  |  3 +++
+ sh.func.c   |  3 +++
+ sh.h        |  4 ++++
+ sh.set.c    | 25 ++++++++++++++++++++++++-
+ 6 files changed, 43 insertions(+), 3 deletions(-)
+
+diff --git a/ed.inputl.c b/ed.inputl.c
+index 248130a..7644a47 100644
+--- a/ed.inputl.c
++++ b/ed.inputl.c
+@@ -683,7 +683,7 @@ GetNextCommand(KEYCMD *cmdnum, Char *ch)
+ #ifdef DSPMBYTE
+ 	     _enable_mbdisp &&
+ #else
+-	     MB_LEN_MAX == 1 &&
++	     MB_CUR_MAX == 1 &&
+ #endif
+ 	     !adrof(STRnokanji) && (*ch & META)) {
+ 	    MetaNext = 0;
+diff --git a/sh.c b/sh.c
+index f28d04a..24e3484 100644
+--- a/sh.c
++++ b/sh.c
+@@ -755,7 +755,14 @@ main(int argc, char **argv)
+       nt_autoset_dspmbyte();
+ #endif /* WINNT_NATIVE */
+ #endif
+-
++#if defined(AUTOSET_KANJI) 
++# if defined(NLS) && defined(LC_CTYPE)
++    if (setlocale(LC_CTYPE, NULL) != NULL || getenv("LANG") != NULL)
++# else
++    if (getenv("LANG") != NULL)
++# endif
++	autoset_kanji();
++#endif /* AUTOSET_KANJI */
+     fix_version();		/* publish the shell version */
+ 
+     if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+diff --git a/sh.decls.h b/sh.decls.h
+index a9273af..b7ec371 100644
+--- a/sh.decls.h
++++ b/sh.decls.h
+@@ -391,6 +391,9 @@ extern	Char		 *unparse	(struct command *);
+ extern	void 		  update_dspmbyte_vars	(void);
+ extern	void		  autoset_dspmbyte	(const Char *);
+ #endif
++#if defined(AUTOSET_KANJI)
++extern	void		  autoset_kanji	(void);
++#endif
+ 
+ /*
+  * sh.time.c
+diff --git a/sh.func.c b/sh.func.c
+index 272c501..bbc6407 100644
+--- a/sh.func.c
++++ b/sh.func.c
+@@ -1293,6 +1293,9 @@ dosetenv(Char **v, struct command *c)
+ # ifdef LC_CTYPE
+ 	(void) setlocale(LC_CTYPE, ""); /* for iscntrl */
+ # endif /* LC_CTYPE */
++# if defined(AUTOSET_KANJI)
++        autoset_kanji();
++# endif /* AUTOSET_KANJI */
+ # ifdef NLS_CATALOGS
+ #  ifdef LC_MESSAGES
+ 	(void) setlocale(LC_MESSAGES, "");
+diff --git a/sh.h b/sh.h
+index 88bff1c..e612aa6 100644
+--- a/sh.h
++++ b/sh.h
+@@ -92,6 +92,10 @@ typedef unsigned long intptr_t;
+ # define INIT_ZERO_STRUCT
+ # define force_read xread
+ #endif /*!WINNT_NATIVE */
++
++#if defined(KANJI) && defined(WIDE_STRINGS) && defined(HAVE_NL_LANGINFO) && defined(CODESET)
++#define AUTOSET_KANJI
++#endif
+ /*
+  * Sanity
+  */
+diff --git a/sh.set.c b/sh.set.c
+index d17d79f..7555962 100644
+--- a/sh.set.c
++++ b/sh.set.c
+@@ -1100,7 +1100,8 @@ x:
+     }
+ }
+ 
+-#if defined(KANJI) && defined(SHORT_STRINGS) && defined(DSPMBYTE)
++#if defined(KANJI)
++# if defined(SHORT_STRINGS) && defined(DSPMBYTE)
+ extern int dspmbyte_ls;
+ 
+ void
+@@ -1275,4 +1276,26 @@ autoset_dspmbyte(const Char *pcp)
+ 	}
+     }
+ }
++# elif defined(AUTOSET_KANJI)
++void
++autoset_kanji(void)
++{
++    char *codeset = nl_langinfo(CODESET);
++    
++    if (*codeset == '\0') {
++	if (adrof(STRnokanji) == NULL)
++	    setNS(STRnokanji);
++	return;
++    }
++
++    if (strcasestr(codeset, "SHIFT_JIS") == (char*)0) {
++	if (adrof(STRnokanji) == NULL)
++	    setNS(STRnokanji);
++	return;
++    }
++
++    if (adrof(STRnokanji) != NULL)
++	unsetv(STRnokanji);
++}
++#endif
+ #endif
+-- 
+2.4.3
+

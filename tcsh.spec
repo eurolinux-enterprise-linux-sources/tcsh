@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.17
-Release: 25%{?dist}
+Release: 35%{?dist}
 License: BSD
 Group: System Environment/Shells
 Source: ftp://ftp.astron.com/pub/tcsh/%{name}-%{version}.00.tar.gz
@@ -29,11 +29,19 @@ Patch25: tcsh-6.17.00-child-kill-hang.patch
 Patch26: tcsh-6.17.00-variable-names.patch
 Patch30: tcsh-6.17.00-handle-signals-before-flush.patch
 Patch31: tcsh-6.17.00-history-file-locking.patch
-Patch32: tcsh-6.17.00-posix-exit-status-value.patch
 Patch33: tcsh-6.17.00-reverse-history-handling-in-loops.patch
 Patch34: tcsh-6.17.00-sigint-while-waiting-for-child.patch
 Patch35: tcsh-6.17.00-sysmalloc.patch
 Patch36: tcsh-6.17.00-wait-hang.patch
+Patch37: tcsh-6.17.00-if-statement-parsing.patch
+Patch38: tcsh-6.17.00-backport-of-anyerror-variable.patch
+Patch39: tcsh-6.17.00-tcsh_posix_status-variable-added.patch
+Patch40: tcsh-6.17.00-use-stderr-upon-error.patch
+Patch41: tcsh-6.17.00-source-memory-leak.patch
+Patch42: tcsh-6.17.00-handle-interrupt-in-eval.patch
+Patch43: tcsh-6.17.00-wide-characters-print.patch
+Patch44: tcsh-6.17.00-use-long-long-for-calculations.patch
+Patch45: tcsh-6.17.00-quote-backslashes-properly.patch
 
 Provides: csh = %{version}
 Requires(post): grep
@@ -74,11 +82,19 @@ like syntax.
 %patch26 -p1 -b .variable-names
 %patch30 -p1 -b .handle-signals-before-flush
 %patch31 -p1 -b .history-file-locking
-%patch32 -p1 -b .posix-exit-status-value
 %patch33 -p1 -b .reverse-history-handling-in-loops
 %patch34 -p1 -b .sigint-while-waiting-for-child
 %patch35 -p1 -b .sysmalloc
 %patch36 -p1 -b .wait-hang
+%patch37 -p1 -b .if-statement-parsing
+%patch38 -p1 -b .backport-of-anyerror-variable
+%patch39 -p1 -b .tcsh_posix_status-variable-added
+%patch40 -p1 -b .use-stderr-upon-error
+%patch41 -p1 -b .source-memory-leak
+%patch42 -p1 -b .handle-interrupt-in-eval
+%patch43 -p1 -b .wide-characters-print
+%patch44 -p1 -b .use-long-long-for-calculations
+%patch45 -p1 -b .quote-backslashes-properly
 
 for i in Fixes WishList; do
  iconv -f iso-8859-1 -t utf-8 "$i" > "${i}_" && \
@@ -146,12 +162,50 @@ fi
 
 %files -f tcsh.lang
 %defattr(-,root,root,-)
-%doc BUGS FAQ Fixes NewThings WishList complete.tcsh README
+%doc Copyright BUGS FAQ Fixes NewThings WishList complete.tcsh README
 %{_bindir}/tcsh
 %{_bindir}/csh
 %{_mandir}/man1/*.1*
 
 %changelog
+* Sun Mar 20 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-35
+- quote backslashes properly to preserve them in `...` expressions
+  Resolves: #1301857
+
+* Fri Jan 15 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-34
+- use the 'long long' type (64 bits) for the internal calculations
+  Resolves: #1298483
+
+* Fri Jan 08 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-33
+- fix the issues with wide characters printing while using LANG=C
+  Resolves: #717367
+
+* Tue Dec 15 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-32
+- handle the ^C interrupt correctly when using the 'eval' built-in command
+  Resolves: #1219923
+
+* Thu Dec 10 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-31
+- fix of memory leak when using the 'source' built-in command
+  Resolves: #1134132
+
+* Mon Dec 07 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-30
+- print error message on stderr (instead of stdout)
+  Resolves: #1019321
+
+* Tue Nov 24 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-29
+- our initial $tcsh_posix_status variable added for backward compatibility
+  Resolves: #1256653
+
+* Mon Nov 23 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-28
+- upstream's $anyerror variable backported
+  Related: #1256653
+
+* Wed Nov 18 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-27
+- spec file updated for build to include the Copyright file (#1186799)
+
+* Fri Oct 30 2015 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.17-26
+- fix of the 'if' statement parsing (#1231097)
+
 * Tue Jan 20 2015 Pavel Raiskup <praiskup@redhat.com> - 6.17-25
 - fix 'wait' built-in hang (#1181680)
 
