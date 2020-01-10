@@ -1,0 +1,36 @@
+From 466297a90d3520d5521c9ca6858a5b7981b3edb8 Mon Sep 17 00:00:00 2001
+From: "Vojtech Vitek (V-Teq)" <vvitek@redhat.com>
+Date: Thu, 10 Nov 2011 17:33:01 +0100
+Subject: [PATCH 1/2] Handle pending signals before flush so that the the
+ history file does not get truncated.  (Ted Anderson)
+
+Patch adapted from upstream patch in tcsh V6.17.01 - 20100506
+http://mx.gw.com/pipermail/tcsh/2010-May/004066.html
+---
+ sh.c |    3 +++
+ 1 files changed, 3 insertions(+), 0 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index 73b6d7f..da818fb 100644
+--- a/sh.c
++++ b/sh.c
+@@ -1288,6 +1288,8 @@ main(int argc, char **argv)
+      */
+     process(setintr);
+ 
++    /* Take care of these (especially HUP) here instead of inside flush. */
++    handle_pending_signals();
+     /*
+      * Mop-up.
+      */
+@@ -2018,6 +2020,7 @@ process(int catch)
+     cleanup_pop_mark(omark);
+     resexit(osetexit);
+     exitset--;
++    handle_pending_signals();
+ }
+ 
+ /*ARGSUSED*/
+-- 
+1.7.6.2
+

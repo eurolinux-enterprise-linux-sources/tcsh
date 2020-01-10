@@ -1,0 +1,27 @@
+From 12ab92b93872dffc61430050b2103ac9498aec1d Mon Sep 17 00:00:00 2001
+From: Roman Kollar <rkollar@redhat.com>
+Date: Thu, 13 Dec 2012 18:32:44 +0100
+Subject: [PATCH] Use system malloc
+
+Originally reported at Red Hat Bugzilla:
+https://bugzilla.redhat.com/show_bug.cgi?id=769157
+---
+ config_f.h | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/config_f.h b/config_f.h
+index 1fd3921..96ee622 100644
+--- a/config_f.h
++++ b/config_f.h
+@@ -143,7 +143,7 @@
+  *		This can be much slower and no memory statistics will be
+  *		provided.
+  */
+-#if defined(__MACHTEN__) || defined(PURIFY) || defined(MALLOC_TRACE) || defined(_OSD_POSIX) || defined(__MVS__)
++#if defined(__MACHTEN__) || defined(PURIFY) || defined(MALLOC_TRACE) || defined(_OSD_POSIX) || defined(__MVS__) || defined(__linux__)
+ # define SYSMALLOC
+ #else
+ # undef SYSMALLOC
+-- 
+1.7.11.7
+

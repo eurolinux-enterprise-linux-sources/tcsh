@@ -1,0 +1,465 @@
+From 941bae3c5c82831c98cd43d13c3765812a0419da Mon Sep 17 00:00:00 2001
+From: Roman Kollar <rkollar@redhat.com>
+Date: Fri, 12 Oct 2012 13:01:42 +0200
+Subject: [PATCH] Add .history file locking - shared readers, exclusive writer
+
+Originally reported at Red Hat Bugzilla:
+https://bugzilla.redhat.com/show_bug.cgi?id=648592
+
+Patch by Vojtech Vitek (V-Teq) <vvitek@redhat.com>
+---
+ sh.c       | 95 +++++++++++++++++++++++++++++++++++++++++++++++---------------
+ sh.decls.h |  4 ++-
+ sh.dol.c   |  2 +-
+ sh.err.c   | 16 +++++++++++
+ sh.h       | 17 +++++++++++
+ sh.hist.c  | 72 ++++++++++++++++++++++-------------------------
+ sh.lex.c   |  8 +++---
+ sh.sem.c   |  2 +-
+ 8 files changed, 149 insertions(+), 67 deletions(-)
+
+diff --git a/sh.c b/sh.c
+index da818fb..50e7ae2 100644
+--- a/sh.c
++++ b/sh.c
+@@ -140,6 +140,7 @@ struct saved_state {
+     int	  cantell;
+     struct Bin	  B;
+     int		  justpr;
++    int		  close_unit;
+ };
+ 
+ static	int		  srccat	(Char *, Char *);
+@@ -1251,7 +1252,7 @@ main(int argc, char **argv)
+ 	/*
+ 	 * Source history before .login so that it is available in .login
+ 	 */
+-	loadhist(NULL, 0);
++	loadhist(NULL, FD_RDLCK);
+ #ifndef LOGINFIRST
+ 	if (loginsh)
+ 	    (void) srccat(varval(STRhome), STRsldotlogin);
+@@ -1404,20 +1405,49 @@ static int
+ #else
+ int
+ #endif /*WINNT_NATIVE*/
+-srcfile(const char *f, int onlyown, int flag, Char **av)
++srcfile(const char *f, int onlyown, int flg, Char **av)
+ {
+-    int unit;
+-
+-    if ((unit = xopen(f, O_RDONLY|O_LARGEFILE)) == -1) 
+-	return 0;
+-    cleanup_push(&unit, open_cleanup);
+-    unit = dmove(unit, -1);
+-    cleanup_ignore(&unit);
+-    cleanup_until(&unit);
+-
+-    (void) close_on_exec(unit, 1);
+-    srcunit(unit, onlyown, flag, av);
+-    return 1;
++    int *unit;
++
++    unit = xmalloc(sizeof(*unit));
++    cleanup_push(unit, xfree);
++    *unit = xopen(f, O_LARGEFILE |
++		    ((flg & FD_WRLCK) ? (O_CREAT|O_RDWR) : O_RDONLY), 0600);
++    if (*unit == -1)
++	return 0; /* Error. */
++
++    cleanup_push(unit, open_cleanup);
++    *unit = dmove(*unit, -1);
++    (void) close_on_exec(*unit, 1);
++
++    if (flg & (FD_WRLCK | FD_RDLCK)) {
++	struct flock fl;
++
++	fl.l_type = (flg & FD_WRLCK) ? F_WRLCK : F_RDLCK;
++	fl.l_whence = SEEK_SET;
++	fl.l_start = 0;
++	fl.l_len = 0;
++
++	cleanup_push(unit, fcntl_cleanup);
++	if (fcntl(*unit, F_SETLKW, &fl) == -1)
++	    cleanup_ignore(unit);
++    }
++
++    srcunit(*unit, onlyown, (flg & (SRC_HFLAG | SRC_MFLAG)), av);
++
++    /* Unlock the unit, if we don't want to leave it locked (or open). */
++    if ((flg & (FD_WRLCK | FD_RDLCK)) &&
++        (!(flg & FD_LEAVE_LCKD) || !(flg & FD_LEAVE_OPEN)))
++	cleanup_until(unit); /* fcntl_cleanup */
++
++    /* Close the unit, if we don't want to leave it open. */
++    if (!(flg & FD_LEAVE_OPEN)) {
++	cleanup_until(unit); /* open_cleanup */
++	cleanup_until(unit); /* xfree */
++	return -1; /* Not error, but invalid file descriptor. */
++    }
++
++    return *unit; /* File descriptor (fd > FSAFE). */
+ }
+ 
+ 
+@@ -1475,10 +1505,14 @@ st_save(struct saved_state *st, int unit, int hflg, Char **al, Char **av)
+     st->onelflg		= onelflg;
+     st->enterhist	= enterhist;
+     st->justpr		= justpr;
+-    if (hflg)
++    if (hflg && SRC_HFLAG)
+ 	st->HIST	= HIST;
+     else
+ 	st->HIST	= '\0';
++    if (hflg && FD_LEAVE_OPEN)
++	st->close_unit = 0;
++    else
++	st->close_unit = 1;
+     st->cantell		= cantell;
+     cpybin(st->B, B);
+ 
+@@ -1550,7 +1584,8 @@ st_restore(void *xst)
+     }
+     cpybin(B, st->B);
+ 
+-    xclose(SHIN);
++    if (st->close_unit)
++	xclose(SHIN);
+ 
+     insource	= st->insource;
+     SHIN	= st->SHIN;
+@@ -1927,9 +1962,11 @@ process(int catch)
+ 	/*
+ 	 * Echo not only on VERBOSE, but also with history expansion. If there
+ 	 * is a lexical error then we forego history echo.
++	 * Do not echo if we're only entering history (source -h).
+ 	 */
+ 	if ((hadhist && !seterr && intty && !tellwhat && !Expand && !whyles) ||
+-	    adrof(STRverbose)) {
++	    (!enterhist && adrof(STRverbose)))
++	{
+ 	    int odidfds = didfds;
+ 	    haderr = 1;
+ 	    didfds = 0;
+@@ -2027,21 +2064,28 @@ process(int catch)
+ void
+ dosource(Char **t, struct command *c)
+ {
++    dosource_flg(t, c, 0);
++}
++
++int
++dosource_flg(Char **t, struct command *c, int flg)
++{
+     Char *f;
+-    int    hflg = 0;
+     char *file;
++    int fd;
++    int hflg = 0;
+ 
+     USE(c);
+     t++;
+     if (*t && eq(*t, STRmh)) {
+ 	if (*++t == NULL)
+ 	    stderror(ERR_NAME | ERR_HFLAG);
+-	hflg++;
++	hflg |= SRC_HFLAG;
+     }
+     else if (*t && eq(*t, STRmm)) {
+     	if (*++t == NULL)
+ 	    stderror(ERR_NAME | ERR_MFLAG);
+-	hflg = 2;
++	hflg |= SRC_MFLAG;
+     }
+ 
+     f = globone(*t++, G_ERROR);
+@@ -2049,9 +2093,16 @@ dosource(Char **t, struct command *c)
+     cleanup_push(file, xfree);
+     xfree(f);
+     t = glob_all_or_error(t);
+-    if ((!srcfile(file, 0, hflg, t)) && (!hflg) && (!bequiet))
++    fd = srcfile(file, 0, (hflg | flg), t);
++    if ((!fd) && (!hflg) && (!bequiet))
+ 	stderror(ERR_SYSTEM, file, strerror(errno));
+-    cleanup_until(file);
++
++    /* We need to preserve fd and it's cleaning routines on the top of the
++     * cleaning stack. Don't call cleanup_until() but clean it manually. */
++    cleanup_ignore(file);
++    xfree(file);
++
++    return fd; /* File descriptor (fd > FSAFE) or -1. */
+ }
+ 
+ /*
+diff --git a/sh.decls.h b/sh.decls.h
+index 70f76a4..158ddaf 100644
+--- a/sh.decls.h
++++ b/sh.decls.h
+@@ -38,6 +38,7 @@
+  */
+ extern	Char	 	 *gethdir	(const Char *);
+ extern	void		  dosource	(Char **, struct command *);
++extern	int           dosource_flg	(Char **, struct command *, int);
+ extern	void		  exitstat	(void);
+ extern	void		  goodbye	(Char **, struct command *);
+ extern	void		  importpath	(Char *);
+@@ -97,6 +98,7 @@ extern	void		  cleanup_until_mark(void);
+ extern	size_t		  cleanup_push_mark(void);
+ extern	void		  cleanup_pop_mark(size_t);
+ extern	void		  open_cleanup(void *);
++extern	void		  fcntl_cleanup(void *);
+ extern	void		  opendir_cleanup(void *);
+ extern	void		  sigint_cleanup(void *);
+ extern	void		  sigprocmask_cleanup(void *);
+@@ -216,7 +218,7 @@ extern  struct Hist 	 *enthist	(int, struct wordent *, int, int);
+ extern	void	 	  savehist	(struct wordent *, int);
+ extern	char		 *fmthist	(int, ptr_t);
+ extern	void		  rechist	(Char *, int);
+-extern	void		  loadhist	(Char *, int);
++extern	int		  loadhist	(Char *, int);
+ 
+ /*
+  * sh.init.c
+diff --git a/sh.dol.c b/sh.dol.c
+index bafb971..b9fe82a 100644
+--- a/sh.dol.c
++++ b/sh.dol.c
+@@ -1099,6 +1099,6 @@ again:
+     *obp = 0;
+     tmp = short2str(obuf);
+     (void) xwrite(0, tmp, strlen (tmp));
+-    (void) lseek(0, (off_t) 0, L_SET);
++    (void) lseek(0, 0, SEEK_SET);
+     cleanup_until(&inheredoc);
+ }
+diff --git a/sh.err.c b/sh.err.c
+index 279c7b8..426a97b 100644
+--- a/sh.err.c
++++ b/sh.err.c
+@@ -505,6 +505,22 @@ open_cleanup(void *xptr)
+ }
+ 
+ void
++fcntl_cleanup(void *xptr)
++{
++    int *ptr;
++    struct flock fl;
++
++    ptr = xptr;
++
++    fl.l_type = F_UNLCK;
++    fl.l_whence = SEEK_SET;
++    fl.l_start = 0;
++    fl.l_len = 0;
++
++    fcntl(*ptr, F_SETLK, &fl);
++}
++
++void
+ opendir_cleanup(void *xdir)
+ {
+     DIR *dir;
+diff --git a/sh.h b/sh.h
+index f955734..617ef77 100644
+--- a/sh.h
++++ b/sh.h
+@@ -50,6 +50,23 @@
+ # include <inttypes.h>
+ #endif
+ 
++#include <unistd.h>
++#include <fcntl.h>
++/*
++ * Source flags (representing -h or -m).
++ *
++ * File locking flags.
++ * - shared and exclusive (read and write) access to a file
++ * - currently used in sh.c and sh.hist.c files while acessing
++ *   ~/.history file only.
++ */
++#define SRC_HFLAG	0x01 /* History flag */
++#define SRC_MFLAG	0x02 /* Merge flag */
++#define FD_WRLCK	0x04 /* Write lock */
++#define FD_RDLCK	0x08 /* Read lock */
++#define FD_LEAVE_OPEN	0x10 /* Leave file open */
++#define FD_LEAVE_LCKD	0x20 /* Leave file locked */
++
+ #if !defined(HAVE_STDINT_H) && !defined(HAVE_INTTYPES_H) && !defined(WINNT_NATIVE)
+ typedef unsigned long intptr_t;
+ #endif
+diff --git a/sh.hist.c b/sh.hist.c
+index 2863d5c..ac032b1 100644
+--- a/sh.hist.c
++++ b/sh.hist.c
+@@ -255,7 +255,7 @@ dohist(Char **vp, struct command *c)
+     }
+ 
+     if (hflg & (HIST_LOAD | HIST_MERGE))
+-	loadhist(*vp, (hflg & HIST_MERGE) ? 1 : 0);
++	loadhist(*vp, ((hflg & HIST_MERGE) ? SRC_MFLAG : 0) | FD_RDLCK);
+     else if (hflg & HIST_SAVE)
+ 	rechist(*vp, 1);
+     else {
+@@ -374,8 +374,8 @@ fmthist(int fmt, ptr_t ptr)
+ void
+ rechist(Char *fname, int ref)
+ {
+-    Char    *snum;
+-    int     fp, ftmp, oldidfds;
++    Char   *snum;
++    int    fd = -1, ftmp, oldidfds;
+     struct varent *shist;
+     static Char   *dumphist[] = {STRhistory, STRmhT, 0, 0};
+ 
+@@ -405,15 +405,12 @@ rechist(Char *fname, int ref)
+      * with numerous shells being in simultaneous use. Imagine
+      * any kind of window system. All these shells 'share' the same 
+      * ~/.history file for recording their command line history. 
+-     * Currently the automatic merge can only succeed when the shells
+-     * nicely quit one after another. 
+      *
+-     * Users that like to nuke their environment require here an atomic
+-     * 	loadhist-creat-dohist(dumphist)-close
+-     * sequence.
+-     *
+-     * jw.
+-     */ 
++     * Atomic merge loadhist-creat/ftrunc-dohist(dumphist)-close
++     * implemented using fcntl (shared readers, exclusive writer)
++     * by Vojtech Vitek (V-Teq) <vvitek@redhat.com>.
++     */
++
+     /*
+      * We need the didfds stuff before loadhist otherwise
+      * exec in a script will fail to print if merge is set.
+@@ -421,41 +418,40 @@ rechist(Char *fname, int ref)
+      */
+     oldidfds = didfds;
+     didfds = 0;
+-    if ((shist = adrof(STRsavehist)) != NULL && shist->vec != NULL)
+-	if (shist->vec[1] && eq(shist->vec[1], STRmerge)) {
+-	    /*
+-	     * Unset verbose while we read the history file. From:
+-	     * jbastian@redhat.com (Jeffrey Bastian)
+-	     */
+-	    Char *verb = varval(STRverbose);
+-	    if (verb != STRNULL)
+-		unsetv(STRverbose);
+-	    loadhist(fname, 1);
+-	    if (verb != STRNULL)
+-		setv(STRverbose, verb, VAR_READWRITE);
++    if (((shist = adrof(STRsavehist)) != NULL && shist->vec != NULL) &&
++        (shist->vec[1] && eq(shist->vec[1], STRmerge))) {
++	/* Read .history file, leave it's fd open for writing. */
++	fd = loadhist(fname, SRC_MFLAG|FD_WRLCK|FD_LEAVE_OPEN|FD_LEAVE_LCKD);
++	if (fd != -1) {
++	    /* Truncate the .history file. */
++	    (void) ftruncate(fd, 0);
++	    (void) lseek(fd, 0, SEEK_SET);
+ 	}
+-    fp = xcreat(short2str(fname), 0600);
+-    if (fp == -1) {
+-	didfds = oldidfds;
+-	cleanup_until(fname);
+-	return;
+     }
+-    ftmp = SHOUT;
+-    SHOUT = fp;
+-    dumphist[2] = snum;
+-    dohist(dumphist, NULL);
+-    xclose(fp);
+-    SHOUT = ftmp;
++    if (fd == -1) {
++        /* Open .history file for writing (if not open yet). */
++	fd = xopen(short2str(fname), O_LARGEFILE|O_CREAT|O_WRONLY|O_TRUNC, 0600);
++	if (fd != -1)
++	    cleanup_push(&fd, open_cleanup);
++    }
++    if (fd != -1) {
++	ftmp = SHOUT;
++	SHOUT = fd;
++	dumphist[2] = snum;
++	/* Write history to the .history file. */
++	dohist(dumphist, NULL);
++	SHOUT = ftmp;
++    }
+     didfds = oldidfds;
+     cleanup_until(fname);
+ }
+ 
+ 
+-void
+-loadhist(Char *fname, int mflg)
++int
++loadhist(Char *fname, int flg)
+ {
+     static Char   *loadhist_cmd[] = {STRsource, NULL, NULL, NULL};
+-    loadhist_cmd[1] = mflg ? STRmm : STRmh;
++    loadhist_cmd[1] = (flg & SRC_MFLAG) ? STRmm : STRmh;
+ 
+     if (fname != NULL)
+ 	loadhist_cmd[2] = fname;
+@@ -464,5 +460,5 @@ loadhist(Char *fname, int mflg)
+     else
+ 	loadhist_cmd[2] = STRtildothist;
+ 
+-    dosource(loadhist_cmd, NULL);
++    return dosource_flg(loadhist_cmd, NULL, flg);
+ }
+diff --git a/sh.lex.c b/sh.lex.c
+index 536097e..6c4277d 100644
+--- a/sh.lex.c
++++ b/sh.lex.c
+@@ -1589,7 +1589,7 @@ wide_read(int fildes, Char *buf, size_t nchars, int use_fclens)
+     /* Throwing away possible partial multibyte characters on error if the
+        stream is not seekable */
+     err = errno;
+-    lseek(fildes, -(off_t)partial, L_INCR);
++    lseek(fildes, -(off_t)partial, SEEK_CUR);
+     errno = err;
+     return res != 0 ? res : r;
+ }
+@@ -1604,7 +1604,7 @@ bgetc(void)
+     if (cantell) {
+ 	if (fseekp < fbobp || fseekp > feobp) {
+ 	    fbobp = feobp = fseekp;
+-	    (void) lseek(SHIN, fseekp, L_SET);
++	    (void) lseek(SHIN, fseekp, SEEK_SET);
+ 	}
+ 	if (fseekp == feobp) {
+ #ifdef WIDE_STRINGS
+@@ -1808,7 +1808,7 @@ btell(struct Ain *l)
+ void
+ btoeof(void)
+ {
+-    (void) lseek(SHIN, (off_t) 0, L_XTND);
++    (void) lseek(SHIN, 0, SEEK_END);
+     aret = TCSH_F_SEEK;
+     fseekp = feobp;
+     alvec = NULL;
+@@ -1826,7 +1826,7 @@ settell(void)
+     cantell = 0;
+     if (arginp || onelflg || intty)
+ 	return;
+-    if ((x = lseek(SHIN, (off_t) 0, L_INCR)) == -1)
++    if ((x = lseek(SHIN, 0, SEEK_CUR)) == -1)
+ 	return;
+     fbuf = xcalloc(2, sizeof(Char **));
+     fblocks = 1;
+diff --git a/sh.sem.c b/sh.sem.c
+index 7c5511a..b8eee96 100644
+--- a/sh.sem.c
++++ b/sh.sem.c
+@@ -879,7 +879,7 @@ doio(struct command *t, int *pipein, int *pipeout)
+ 	    fd = xopen(tmp, O_WRONLY|O_APPEND|O_LARGEFILE);
+ #else /* !O_APPEND */
+ 	    fd = xopen(tmp, O_WRONLY|O_LARGEFILE);
+-	    (void) lseek(fd, (off_t) 0, L_XTND);
++	    (void) lseek(fd, 0, SEEK_END);
+ #endif /* O_APPEND */
+ 	}
+ 	else
+-- 
+1.7.11.4
+

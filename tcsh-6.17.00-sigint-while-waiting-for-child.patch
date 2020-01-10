@@ -1,0 +1,29 @@
+From 456172010f52b9ff73c042235265f78864b33eff Mon Sep 17 00:00:00 2001
+From: Roman Kollar <rkollar@redhat.com>
+Date: Wed, 12 Dec 2012 15:02:26 +0100
+Subject: [PATCH] Fix tcsh being interruptible while waiting for child process
+
+Originally reported at Red Hat Bugzilla:
+https://bugzilla.redhat.com/show_bug.cgi?id=884937
+
+Accepted upstream:
+http://mx.gw.com/pipermail/tcsh-bugs/2012-December/000797.html
+---
+ sh.proc.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sh.proc.c b/sh.proc.c
+index 4e084e0..3516bef 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -500,6 +500,7 @@ pjwait(struct process *pp)
+     cleanup_push(&oset, sigprocmask_cleanup);
+     pause_mask = oset;
+     sigdelset(&pause_mask, SIGCHLD);
++    sigaddset(&pause_mask, SIGINT);
+     for (;;) {
+ 	handle_pending_signals();
+ 	jobflags = 0;
+-- 
+1.7.11.7
+

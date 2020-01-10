@@ -1,0 +1,12 @@
+diff -up tcsh-6.17.00/sh.proc.c.bz607368 tcsh-6.17.00/sh.proc.c
+--- tcsh-6.17.00/sh.proc.c.bz607368	2011-04-28 14:14:24.000000000 +0900
++++ tcsh-6.17.00/sh.proc.c	2011-04-28 14:14:55.000000000 +0900
+@@ -367,7 +367,7 @@ found:
+ #ifdef notdef
+ 		jobflags & PAEXITED ||
+ #endif /* notdef */
+-		!eq(dcwd->di_name, fp->p_cwd->di_name))) {
++		fp->p_cwd == NULL || !eq(dcwd->di_name, fp->p_cwd->di_name))) {
+ 	    /* PWP: print a newline after ^C */
+ 		if (jobflags & PINTERRUPTED) {
+ 		    xputchar('\r' | QUOTE);

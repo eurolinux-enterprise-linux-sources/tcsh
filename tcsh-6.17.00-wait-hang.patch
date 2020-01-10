@@ -1,0 +1,88 @@
+From 8858ffe1b7ad4622371aa8215e17c99fed9e42be Mon Sep 17 00:00:00 2001
+From: Pavel Raiskup <praiskup@redhat.com>
+Date: Tue, 20 Jan 2015 08:14:07 +0100
+Subject: [PATCH] Fix 'wait' built-in hang
+
+Make sure that SIGCHLD is blocked before we call
+handle_pending_signals() for the first time and before we actually
+check for pp->p_flags & PRUNNING to make sure that the SIGCHLD is
+not leaked meanwhile.
+
+Reproducer hanging after several seconds with tcsh up to 6.18.2:
+while (1)
+  ( date & ; wait )
+end
+
+Resolves: 1181685
+---
+ Fixes     |  4 ++++
+ sh.proc.c | 23 ++++++++++++++++++++++-
+ 2 files changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/Fixes b/Fixes
+index 5bce55c..4d1be80 100644
+--- a/Fixes
++++ b/Fixes
+@@ -1,3 +1,7 @@
++ 29. Pavel Raiskup fix hang with:
++	while (1)
++	   ( date & ; wait )
++        end
+  21. V6.17.00 - 20090710
+  20. Fix dataroot autoconf issue.
+  19. Fix directory stuff for unit tests.
+diff --git a/sh.proc.c b/sh.proc.c
+index 3516bef..d119916 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -587,25 +587,46 @@ void
+ dowait(Char **v, struct command *c)
+ {
+     struct process *pp;
++
++    /* the current block mask to be able to restore */
++    sigset_t old_mask;
++
++    /* block mask for critical section: OLD_MASK U {SIGCHLD} */
++    sigset_t block_mask;
++
++    /* ignore those during blocking sigsuspend:
++       OLD_MASK / {SIGCHLD, possibly(SIGINT)} */
+     sigset_t pause_mask;
+ 
+     USE(c);
+     USE(v);
+     pjobs++;
++
+     sigprocmask(SIG_BLOCK, NULL, &pause_mask);
+     sigdelset(&pause_mask, SIGCHLD);
+     if (setintr)
+ 	sigdelset(&pause_mask, SIGINT);
++
++    /* critical section, block also SIGCHLD */
++    sigprocmask(SIG_BLOCK, NULL, &block_mask);
++    sigaddset(&block_mask, SIGCHLD);
++    sigprocmask(SIG_BLOCK, &block_mask, &old_mask);
++
++    /* detect older SIGCHLDs and remove PRUNNING flag from proclist */
++    (void)handle_pending_signals();
++
+ loop:
+     for (pp = proclist.p_next; pp; pp = pp->p_next)
+ 	if (pp->p_procid &&	/* pp->p_procid == pp->p_jobid && */
+ 	    pp->p_flags & PRUNNING) {
+-	    handle_pending_signals();
++	    /* wait for (or pick up alredy blocked) SIGCHLD */
+ 	    sigsuspend(&pause_mask);
+ 	    handle_pending_signals();
+ 	    goto loop;
+ 	}
+     pjobs = 0;
++
++    sigprocmask(SIG_SETMASK, &old_mask, NULL);
+ }
+ 
+ /*
+-- 
+2.1.0
+
