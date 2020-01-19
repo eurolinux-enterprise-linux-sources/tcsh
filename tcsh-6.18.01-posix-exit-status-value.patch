@@ -1,0 +1,105 @@
+diff --git a/sh.c b/sh.c
+index f897317..322a5c6 100644
+--- a/sh.c
++++ b/sh.c
+@@ -351,8 +351,6 @@ main(int argc, char **argv)
+     PRCHROOT = '#';		/* likewise for root */
+     word_chars = STR_WORD_CHARS;
+     bslash_quote = 0;		/* PWP: do tcsh-style backslash quoting? */
+-    anyerror = 1;		/* for compatibility */
+-    setcopy(STRanyerror, STRNULL, VAR_READWRITE);
+ 
+     /* Default history size to 100 */
+     setcopy(STRhistory, str2short("100"), VAR_READWRITE);
+diff --git a/sh.h b/sh.h
+index 4e3f13c..7d31db9 100644
+--- a/sh.h
++++ b/sh.h
+@@ -596,7 +596,7 @@ EXTERN int    havhash IZERO;	/* path hashing is available */
+ EXTERN int    editing IZERO;	/* doing filename expansion and line editing */
+ EXTERN int    noediting IZERO;	/* initial $term defaulted to noedit */
+ EXTERN int    bslash_quote IZERO;/* PWP: tcsh-style quoting?  (in sh.c) */
+-EXTERN int    anyerror IZERO;	/* propagate errors from pipelines/backq */
++EXTERN int    tcsh_posix_status IZERO;	/* POSIX-like error $status behaviour */
+ EXTERN int    compat_expr IZERO;/* csh-style expressions? */
+ EXTERN int    isoutatty IZERO;	/* is SHOUT a tty */
+ EXTERN int    isdiagatty IZERO;/* is SHDIAG a tty */
+diff --git a/sh.proc.c b/sh.proc.c
+index f2356d1..4e814f8 100644
+--- a/sh.proc.c
++++ b/sh.proc.c
+@@ -558,9 +558,9 @@ pjwait(struct process *pp)
+     reason = 0;
+     fp = pp;
+     do {
+-	/* In case of pipelines only the result of the last
+-	 * command should be taken in account */
+-	if (!anyerror && !(fp->p_flags & PBRACE)
++	/* In case of POSIX-like behaviour, only the result of the last
++	 * command in pipeline/backq should be taken in account */
++	if (tcsh_posix_status && !(fp->p_flags & PBRACE)
+ 		&& ((fp->p_flags & PPOU) || (fp->p_flags & PBACKQ)))
+ 	    continue;
+ 	if (fp->p_reason)
+diff --git a/sh.set.c b/sh.set.c
+index 0f98a2b..763a1dc 100644
+--- a/sh.set.c
++++ b/sh.set.c
+@@ -106,8 +106,8 @@ update_vars(Char *vp)
+     else if (eq(vp, STRloginsh)) {
+ 	loginsh = 1;
+     }
+-    else if (eq(vp, STRanyerror)) {
+-	anyerror = 1;
++    else if (eq(vp, STRtcsh_posix_status)) {
++	tcsh_posix_status = 1;
+     }
+     else if (eq(vp, STRsymlinks)) {
+ 	Char *pn = varval(vp);
+@@ -766,8 +766,8 @@ unset(Char **v, struct command *c)
+ 	HistLit = 0;
+     if (adrof(STRloginsh) == 0)
+ 	loginsh = 0;
+-    if (adrof(STRanyerror) == 0)
+-	anyerror = 0;
++    if (adrof(STRtcsh_posix_status) == 0)
++	tcsh_posix_status = 0;
+     if (adrof(STRwordchars) == 0)
+ 	word_chars = STR_WORD_CHARS;
+     if (adrof(STRedit) == 0)
+diff --git a/tc.const.c b/tc.const.c
+index 641e234..4d0c9e3 100644
+--- a/tc.const.c
++++ b/tc.const.c
+@@ -43,7 +43,7 @@ Char STRrootdefautologout[] = { '1', '5', '\0' };
+ #endif
+ Char STRautomatic[]	= { 'a', 'u', 't', 'o', 'm', 'a', 't', 'i', 'c',
+ 			    '\0' };
+-Char STRanyerror[]	= { 'a', 'n', 'y', 'e', 'r', 'r', 'o', 'r', '\0' };
++Char STRtcsh_posix_status[] = { 't', 'c', 's', 'h', '_', 'p', 'o', 's', 'i', 'x', '_', 's', 't', 'a', 't', 'u', 's', '\0' };
+ Char STRhangup[]	= { 'h', 'a', 'n', 'g', 'u', 'p', '\0' };
+ Char STRaout[]		= { 'a', '.', 'o', 'u', 't', '\0' };
+ Char STRtty[]		= { 't', 't', 'y', '\0' };
+diff --git a/tcsh.man b/tcsh.man
+index 8cc45c8..3470659 100644
+--- a/tcsh.man
++++ b/tcsh.man
+@@ -4356,14 +4356,10 @@ Reset to 1 in login shells.
+ See also \fBloginsh\fR.
+ .TP 8
+ .B status
+-The status returned by the last command, unless the variable
+-.B anyerror
+-is set, and any error in a pipeline or a backquote expansion will be
+-propagated (this is the default
+-.B csh
+-behavior, and the current
+-.B tcsh
+-default). If it terminated
++The status of any error in a pipeline or a backquote expansion that is
++propagated as a result `status', unless `tcsh_posix_status'
++variable is set, and only the last command status is taken in account
++(the latter is default behaviour in POSIX-like shells). If it terminated
+ abnormally, then 0200 is added to the status.  Builtin commands
+ which fail return exit status `1', all other builtin commands
+ return status `0'.

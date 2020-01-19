@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.18.01
-Release: 15%{?dist}
+Release: 7%{?dist}
 License: BSD
 Group: System Environment/Shells
 Source: http://ftp.funet.fi/pub/unix/shells/tcsh/%{name}-%{version}.tar.gz
@@ -22,19 +22,8 @@ Patch31: tcsh-6.18.00-history-file-locking.patch
 #Patch32: tcsh-6.18.00-sigint-while-waiting-for-child.patch
 Patch33: tcsh-6.18.00-history-merge.patch
 Patch34: tcsh-6.18.01-repeated-words-man.patch
+Patch35: tcsh-6.18.01-posix-exit-status-value.patch
 Patch36: tcsh-6.18.01-reverse-history-handling-in-loops.patch
-Patch37: tcsh-6.18.01-wait-hang.patch
-Patch38: tcsh-6.18.01-tcsh_posix_status-variable-implemented.patch
-Patch39: tcsh-6.18.01-if-statement-parsing.patch
-Patch40: tcsh-6.18.01-quote-backslashes-properly.patch
-Patch41: tcsh-6.18.01-sigint-while-waiting-for-child.patch
-Patch42: tcsh-6.18.01-source-memory-leak.patch
-Patch43: tcsh-6.18.01-use-stderr-upon-error.patch
-Patch44: tcsh-6.18.01-use-sysmalloc.patch
-Patch45: tcsh-6.18.01-handle-interrupt-in-eval.patch
-Patch46: tcsh-6.18.01-time-output-in-setenv.patch
-Patch47: tcsh-6.18.01-fix-hang-on-remote-filesystem.patch
-Patch48: tcsh-6.18.01-fix-memory-leak-for-cdpath.patch
 
 Provides: csh = %{version}
 Requires(post): grep
@@ -65,19 +54,8 @@ like syntax.
 #%%patch32 -p1 -b .sigint-while-waiting-for-child
 %patch33 -p1 -b .history-merge
 %patch34 -p1 -b .repeated-words-man
+%patch35 -p1 -b .posix-exit-status-value
 %patch36 -p1 -b .reverse-history-handling-in-loops
-%patch37 -p1 -b .wait-hang
-%patch38 -p1 -b .tcsh_posix_status-variable-implemented
-%patch39 -p1 -b .if-statement-parsing
-%patch40 -p1 -b .quote-backslashes-properly
-%patch41 -p1 -b .sigint-while-waiting-for-child
-%patch42 -p1 -b .source-memory-leak
-%patch43 -p1 -b .use-stderr-upon-error
-%patch44 -p1 -b .use-sysmalloc
-%patch45 -p1 -b .handle-interrupt-in-eval
-%patch46 -p1 -b .time-output-in-setenv
-%patch47 -p1
-%patch48 -p1
 
 for i in Fixes WishList; do
  iconv -f iso-8859-1 -t utf-8 "$i" > "${i}_" && \
@@ -151,42 +129,6 @@ fi
 %{_mandir}/man1/*.1*
 
 %changelog
-* Thu Feb 16 2017 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-15
-- fix for memory leak when cdpath fails to find a matching path (#1325346)
-
-* Tue Feb 07 2017 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-14
-- fix hanging of tcsh when .history file is located on remote filesystem (#1388426)
-
-* Thu Jul 14 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-13
-- Fix yet another regression in tcsh-6.18.01-quote-backslashes-properly.patch
-  Related: #1334751
-
-* Thu May 26 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-12
-- Fix another regression in tcsh-6.18.01-quote-backslashes-properly.patch
-  Related: #1334751
-
-- Fix regression in tcsh-6.18.01-use-stderr-upon-error.patch
-  Related: #1273498
-
-* Mon May 16 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-11
-- Fix regression introduced in tcsh-6.18.01-quote-backslashes-properly.patch
-  Related: #1319816
-
-* Thu Apr 07 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-10
-- Handle the ^C interrupt correctly when using the 'eval' built-in. (#1273500)
-
-* Tue Mar 29 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> -  6.18.01-9
-- 'if statement' parsing fixed when the space is missing after ')'. (#1273892)
-- Quote backslashes properly to preserve them in `...` expressions. (#1319816)
-- Fix for tcsh being interruptible while waiting for child process. (#1269370)
-- Fix of memory leak when using the 'source' built-in command.      (#1273513)
-- Print error message on stderr (instead of stdout).                (#1273498)
-- Use GLIBC's malloc instead of builtin malloc.                     (#1315713)
-
-* Fri Jul 10 2015 David Kaspar <dkaspar@redhat.com> - 6.18.01-8
-- Upstream's $anyerror variable re-introduced. (#1123854)
-- Fix for hang inside the 'wait' built-in of tcsh added. (#1181682)
-
 * Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 6.18.01-7
 - Mass rebuild 2014-01-24
 
