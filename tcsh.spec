@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.18.01
-Release: 13%{?dist}
+Release: 15%{?dist}
 License: BSD
 Group: System Environment/Shells
 Source: http://ftp.funet.fi/pub/unix/shells/tcsh/%{name}-%{version}.tar.gz
@@ -33,6 +33,8 @@ Patch43: tcsh-6.18.01-use-stderr-upon-error.patch
 Patch44: tcsh-6.18.01-use-sysmalloc.patch
 Patch45: tcsh-6.18.01-handle-interrupt-in-eval.patch
 Patch46: tcsh-6.18.01-time-output-in-setenv.patch
+Patch47: tcsh-6.18.01-fix-hang-on-remote-filesystem.patch
+Patch48: tcsh-6.18.01-fix-memory-leak-for-cdpath.patch
 
 Provides: csh = %{version}
 Requires(post): grep
@@ -74,6 +76,8 @@ like syntax.
 %patch44 -p1 -b .use-sysmalloc
 %patch45 -p1 -b .handle-interrupt-in-eval
 %patch46 -p1 -b .time-output-in-setenv
+%patch47 -p1
+%patch48 -p1
 
 for i in Fixes WishList; do
  iconv -f iso-8859-1 -t utf-8 "$i" > "${i}_" && \
@@ -147,6 +151,12 @@ fi
 %{_mandir}/man1/*.1*
 
 %changelog
+* Thu Feb 16 2017 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-15
+- fix for memory leak when cdpath fails to find a matching path (#1325346)
+
+* Tue Feb 07 2017 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-14
+- fix hanging of tcsh when .history file is located on remote filesystem (#1388426)
+
 * Thu Jul 14 2016 David Kaspar [Dee'Kej] <dkaspar@redhat.com> - 6.18.01-13
 - Fix yet another regression in tcsh-6.18.01-quote-backslashes-properly.patch
   Related: #1334751

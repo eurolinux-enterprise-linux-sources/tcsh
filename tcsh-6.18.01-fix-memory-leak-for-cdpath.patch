@@ -1,0 +1,25 @@
+From 474b7f1d1b3e43864a2acd75d0611709d766a187 Mon Sep 17 00:00:00 2001
+From: Christos Zoulas <christos@zoulas.com>
+Date: Fri, 8 Apr 2016 16:10:52 +0000
+Subject: [PATCH] fix memory leak when cdpath fails to find a matching path
+ (David Kaspar)
+
+---
+ sh.dir.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/sh.dir.c b/sh.dir.c
+index ab89855..2e77f23 100644
+--- a/sh.dir.c
++++ b/sh.dir.c
+@@ -674,6 +674,7 @@ dfollow(Char *cp, int old)
+ 		cleanup_until(cp);
+ 		return dgoto(cp);
+ 	    }
++	    xfree(dp);
+ 	}
+ 	xfree(buf.s);
+     }
+-- 
+2.9.3
+
