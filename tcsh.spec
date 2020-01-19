@@ -3,7 +3,7 @@
 Summary: An enhanced version of csh, the C shell
 Name: tcsh
 Version: 6.18.01
-Release: 7%{?dist}
+Release: 8%{?dist}
 License: BSD
 Group: System Environment/Shells
 Source: http://ftp.funet.fi/pub/unix/shells/tcsh/%{name}-%{version}.tar.gz
@@ -22,8 +22,9 @@ Patch31: tcsh-6.18.00-history-file-locking.patch
 #Patch32: tcsh-6.18.00-sigint-while-waiting-for-child.patch
 Patch33: tcsh-6.18.00-history-merge.patch
 Patch34: tcsh-6.18.01-repeated-words-man.patch
-Patch35: tcsh-6.18.01-posix-exit-status-value.patch
 Patch36: tcsh-6.18.01-reverse-history-handling-in-loops.patch
+Patch37: tcsh-6.18.01-wait-hang.patch
+Patch38: tcsh-6.18.01-tcsh_posix_status-variable-implemented.patch
 
 Provides: csh = %{version}
 Requires(post): grep
@@ -54,8 +55,9 @@ like syntax.
 #%%patch32 -p1 -b .sigint-while-waiting-for-child
 %patch33 -p1 -b .history-merge
 %patch34 -p1 -b .repeated-words-man
-%patch35 -p1 -b .posix-exit-status-value
 %patch36 -p1 -b .reverse-history-handling-in-loops
+%patch37 -p1 -b .wait-hang
+%patch38 -p1 -b .tcsh_posix_status-variable-implemented
 
 for i in Fixes WishList; do
  iconv -f iso-8859-1 -t utf-8 "$i" > "${i}_" && \
@@ -129,6 +131,12 @@ fi
 %{_mandir}/man1/*.1*
 
 %changelog
+* Fri Jul 10 2015 David Kaspar <dkaspar@redhat.com> - 6.18.01-8
+- Upstream's $anyerror variable re-introduced. (#1123854)
+
+* Thu Jul 9  2015 David Kaspar <dkaspar@redhat.com> - 6.18.01-8
+- Fix for hang inside the 'wait' built-in of tcsh added. (#1181682)
+
 * Fri Jan 24 2014 Daniel Mach <dmach@redhat.com> - 6.18.01-7
 - Mass rebuild 2014-01-24
 
